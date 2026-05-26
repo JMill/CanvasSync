@@ -1,4 +1,7 @@
+# worklog. last edit 2025-08-30 by jmill
+# - replace py-bcrypt with bcrypt for compatibility on modern macOS/Python.
+
 requests
 pycryptodome
-py-bcrypt
+bcrypt
 six

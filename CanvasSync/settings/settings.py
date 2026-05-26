@@ -1,3 +1,8 @@
+# worklog. last edit 2025-08-30 by jmill
+# - enable non-interactive setup via env vars (sync path, domain, token, select-all, advanced defaults)
+# - added env var password support in cryptography module earlier; integrate usage here; keep interactive fallback
+# - minor validation for domain/token and base path
+
 """
 CanvasSync by Mathias Perslev
 February 2017
@@ -66,9 +71,16 @@ class Settings(object):
         self.avoid_duplicates = True
         self.use_nicknames = False
 
-        # Get the path pointing to the settings file.
-        self.settings_path = os.path.abspath(os.path.expanduser(u"~")
-                                             + u"/.CanvasSync.settings")
+        # Get the path pointing to the settings file. Allow override so
+        # multiple Canvas instances (e.g. PSU + Emeritus) can coexist with
+        # their own persistent settings.
+        env_settings_path = os.environ.get('CANVASSYNC_SETTINGS_PATH')
+        if env_settings_path:
+            self.settings_path = os.path.abspath(
+                os.path.expanduser(env_settings_path))
+        else:
+            self.settings_path = os.path.abspath(os.path.expanduser(u"~")
+                                                 + u"/.CanvasSync.settings")
 
         # Initialize user prompt class, used to get information from the user
         # via the terminal
@@ -164,24 +176,98 @@ class Settings(object):
         # Clear the console and print guidance
         self.print_settings(first_time_setup=True, clear=True)
 
-        # Prompt user for sync path
-        self.sync_path = user_prompter.ask_for_sync_path()
+        # Support non-interactive setup via environment variables
+        # 1) sync path
+        env_sync_path = os.environ.get('CANVASSYNC_SYNC_PATH')
+        if env_sync_path:
+            p = env_sync_path.replace(u"~", os.path.expanduser(u"~"))
+            p = os.path.abspath(p)
+            if not os.path.exists(os.path.split(p)[0]):
+                print(ANSI.format(u"\n[ERROR] Base path '%s' does not exist." % os.path.split(p)[0], u"red"))
+                sys.exit(1)
+            self.sync_path = p
+        else:
+            # Prompt user for sync path
+            self.sync_path = user_prompter.ask_for_sync_path()
         self.print_settings(first_time_setup=True, clear=True)
 
-        # Prompt user for domain
-        self.domain = user_prompter.ask_for_domain()
+        # 2) domain
+        env_domain = os.environ.get('CANVASSYNC_DOMAIN')
+        if env_domain:
+            d = env_domain.strip()
+            if not d.startswith('http://') and not d.startswith('https://'):
+                d = 'https://' + d
+            if not helpers.validate_domain(d):
+                print(ANSI.format(u"\n[ERROR] Invalid Canvas domain provided via CANVASSYNC_DOMAIN.", u"red"))
+                sys.exit(1)
+            self.domain = d
+        else:
+            # Prompt user for domain
+            self.domain = user_prompter.ask_for_domain()
         self.print_settings(first_time_setup=True, clear=True)
 
-        # Prompt user for auth token
-        self.token = user_prompter.ask_for_token(domain=self.domain)
+        # 3) token
+        env_token = os.environ.get('CANVASSYNC_TOKEN')
+        if env_token:
+            if not helpers.validate_token(self.domain, env_token):
+                print(ANSI.format(u"\n[ERROR] Invalid authentication token provided via CANVASSYNC_TOKEN.", u"red"))
+                sys.exit(1)
+            self.token = env_token
+        else:
+            # Prompt user for auth token
+            self.token = user_prompter.ask_for_token(domain=self.domain)
         self.print_settings(first_time_setup=True, clear=True)
 
-        # Prompt user for course sync selection
-        self.courses_to_sync = user_prompter.ask_for_courses(self, api=self.api)
+        # 4) courses selection
+        env_courses = os.environ.get('CANVASSYNC_COURSES')
+        select_all = os.environ.get('CANVASSYNC_SELECT_ALL_COURSES')
+        if env_courses:
+            # choose only the courses whose sanitized names contain provided substrings
+            wanted = [w.strip() for w in env_courses.split(',') if w.strip()]
+            courses = self.api.get_courses()
+            courses = [c for c in courses if 'access_restricted_by_date' not in c]
+            selected = []
+            for c in courses:
+                if self.use_nicknames and 'name' in c:
+                    cname = c[u"name"]
+                elif 'course_code' in c:
+                    cname = helpers.get_corrected_name(c[u"course_code"].split(";")[-1])
+                else:
+                    continue
+                lc_cname = cname.lower()
+                for w in wanted:
+                    # sanitize substring similarly for robust matching
+                    sw = helpers.get_corrected_name(w).lower()
+                    if sw in lc_cname:
+                        selected.append(cname)
+                        break
+            # de-dup while preserving order
+            seen = set()
+            self.courses_to_sync = [x for x in selected if not (x in seen or seen.add(x))]
+        elif select_all and select_all.lower() in (u"1", u"true", u"yes"): 
+            # mirror ask_for_courses name mapping
+            courses = self.api.get_courses()
+            courses = [c for c in courses if 'access_restricted_by_date' not in c]
+            if self.use_nicknames:
+                self.courses_to_sync = [c[u"name"] for c in courses if "name" in c]
+            else:
+                # sanitize to match Course.__init__ helpers.get_corrected_name
+                self.courses_to_sync = [
+                    helpers.get_corrected_name(c[u"course_code"].split(";")[-1])
+                    for c in courses if 'course_code' in c
+                ]
+        else:
+            # Prompt user for course sync selection
+            self.courses_to_sync = user_prompter.ask_for_courses(self, api=self.api)
         self.print_settings(first_time_setup=True, clear=True)
 
-        # Ask user for advanced settings
-        show_advanced = user_prompter.ask_for_advanced_settings(self)
+        # 5) advanced settings
+        adv_defaults = os.environ.get('CANVASSYNC_ADVANCED_DEFAULTS')
+        if adv_defaults and adv_defaults.lower() in (u"1", u"true", u"yes"):
+            show_advanced = False
+        else:
+            # Ask user for advanced settings
+            show_advanced = user_prompter.ask_for_advanced_settings(self)
 
         if show_advanced:
             self.modules_settings = user_prompter.ask_for_module_settings(self.modules_settings, self)
