@@ -5,7 +5,7 @@ Fork of perslev/CanvasSync — Python CLI that syncs Canvas LMS courses to disk 
 ## What this fork adds
 
 - Env-var config for non-interactive, multi-instance use (commit `64438db`): vars in `CanvasSync/settings/settings.py` and `cryptography.py`.
-- `bin/canvas_browser_archive.py` (untracked): archives a course using a logged-in browser session's cookies, for institutions like PSU that disable personal API tokens. Wrapped by `~/bin/canvas-archive`.
+- `bin/canvas_browser_archive.py`: archives a course using a logged-in browser session's cookies, for institutions like PSU that disable personal API tokens. Wrapped by `~/bin/canvas-archive`.
 
 ## Workflows on this machine
 
