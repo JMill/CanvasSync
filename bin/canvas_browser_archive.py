@@ -256,12 +256,17 @@ class Archiver:
 
     def do_files(self):
         folders = self.try_api("folders", f"courses/{self.cid}/folders")
-        files = self.try_api("files", f"courses/{self.cid}/files")
-        if files is None:
-            files = self._files_from_references()
-            print(f"    (files index hidden; found {len(files)} files via modules + embedded links)")
-        else:
-            self.save_json("_api/files.json", files)
+        indexed = self.try_api("files", f"courses/{self.cid}/files")
+        if indexed is None:
+            print("    (files index hidden; relying on modules + embedded links)")
+            indexed = []
+        # A successful index is not a complete one: Canvas omits files flagged
+        # hidden, though they stay reachable by id. Always union the two sources.
+        extra = self._files_from_references(known={f["id"] for f in indexed})
+        if extra:
+            print(f"    (+{len(extra)} file(s) absent from the index, found via modules + embedded links)")
+        files = indexed + extra
+        self.save_json("_api/files.json", files)
         self.save_json("_api/folders.json", folders or [])
         folder_path = {}
         for f in folders or []:
@@ -301,10 +306,11 @@ class Archiver:
         self.counts["files"] = len(files)
         print(f"  files: {len(files)} ({downloaded} downloaded, {skipped} unchanged, {failed} failed)")
 
-    def _files_from_references(self):
-        """When the Files tab is hidden, collect file ids from module items and
-        from /files/<id> links embedded in already-archived content, then fetch
-        each file's metadata individually (item-level permissions still apply)."""
+    def _files_from_references(self, known=()):
+        """Collect file ids from module items and from /files/<id> links embedded in
+        already-archived content, then fetch each file's metadata individually.
+        Catches files the course Files index omits (hidden ones) or cannot list at
+        all (Files tab disabled). Item-level permissions still apply."""
         ids = {it["content_id"] for m in self._modules or []
                for it in m.get("items", []) if it.get("type") == "File" and it.get("content_id")}
         pat = re.compile(r"/(?:courses/%s/)?files/(\d+)" % self.cid)
@@ -316,11 +322,10 @@ class Archiver:
                 if p.suffix in (".html", ".json"):
                     ids.update(int(m) for m in pat.findall(p.read_text(errors="ignore")))
         files = []
-        for fid in sorted(ids):
+        for fid in sorted(ids - set(known)):
             meta = self.try_api(f"file {fid}", f"courses/{self.cid}/files/{fid}")
             if meta:
                 files.append(meta)
-        self.save_json("_api/files.json", files)
         return files
 
     def write_index(self, course, tabs):
