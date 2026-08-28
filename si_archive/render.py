@@ -14,6 +14,16 @@ One page per module item, grouped by kind under its section:
     sections/<dirname>/other/<slug>.html                depth 3 (external_tool, etc.)
     sections/<dirname>/elucidat/<slug>.html             depth 3 (mirrored Elucidat pages)
 
+Real content the manifest carries but no module item reaches -- found by
+scanning the manifest's full resource table, not by following links from
+what's already linked -- lives under its own tree, one hub page per archive:
+
+    unlinked/index.html                                 depth 1
+    unlinked/pages/<slug>.html                           depth 2
+    unlinked/assessments/<slug>.html                     depth 2
+    unlinked/discussions/<slug>.html                     depth 2
+    unlinked/assignments/<slug>.html                     depth 2
+
 Elucidat placement is derived at runtime by scanning each item's HTML for an
 `elucidat.com/course/<code>` reference and matching it against
 constants.ELUCIDAT_PROJECTS, rather than trusting a hardcoded table that
@@ -32,7 +42,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from si_archive import constants, media
-from si_archive.cartridge import attach_item_content, slugify
+from si_archive.cartridge import parse_assignment, parse_discussion, slugify
 from si_archive.cartridge import _read_body as cartridge_read_body
 
 FILEBASE_RE = re.compile(r"%24IMS-CC-FILEBASE%24(/[^\"'\s>]*)")
@@ -50,7 +60,6 @@ WIKI_HREF_RE = re.compile(r'\shref="[^"]*%24WIKI_REFERENCE%24/pages/([^"?]*)[^"]
 OBJECT_HREF_RE = re.compile(
     r'\shref="[^"]*%24CANVAS_OBJECT_REFERENCE%24/[a-z_]+/([^"?]*)[^"]*"')
 COURSE_HREF_RE = re.compile(r'\shref="[^"]*%24CANVAS_COURSE_REFERENCE%24/([^"?]*)[^"]*"')
-OBJECT_REF_SCAN_RE = re.compile(r'%24CANVAS_OBJECT_REFERENCE%24/([a-z_]+)/([^"\'\s>?]*)')
 
 # Elucidat's own player-template variables, never substituted in a baked
 # static export ({{next.url}}, {{navigation.first.url}}, ...). They sit in
@@ -60,19 +69,13 @@ TEMPLATE_ATTR_RE = re.compile(r'\s(?:href|src)="[^"]*\{\{[^"]*"')
 IDENTIFIER_META_RE = re.compile(r'<meta name="identifier" content="([^"]*)"')
 TITLE_TAG_RE = re.compile(r"<title>([^<]*)</title>")
 
-OBJECT_REF_TYPE_TO_CONTENT_TYPE = {
-    "assignments": "Assignment", "discussion_topics": "DiscussionTopic",
-    "quizzes": "Quizzes::Quiz",
-}
-OBJECT_REF_TYPE_TO_SUBDIR = {
-    "assignments": "unlinked-assignments", "discussion_topics": "unlinked-discussions",
-    "quizzes": "unlinked-quizzes",
-}
-OBJECT_REF_TYPE_LABEL = {
-    "assignments": "Assignments", "discussion_topics": "Discussions", "quizzes": "Quizzes",
-}
-
 QTI = "{http://www.imsglobal.org/xsd/ims_qtiasiv1p2}"
+IMSCP_NS = "{http://www.imsglobal.org/xsd/imsccv1p1/imscp_v1p1}"
+TOPIC_META_NS = "{http://canvas.instructure.com/xsd/cccv1p0}"
+
+# Every unlinked-content page lives two levels under out_dir:
+# unlinked/<kind>/<slug>.html. unlinked/index.html itself is one level down.
+UNLINKED_DEPTH = 2
 
 KIND_SUBDIR = {"page": "pages", "assignment": "assignments",
                "discussion": "discussions", "quiz": "quizzes"}
@@ -462,13 +465,16 @@ def render_question_banks(banks):
 
 # ------------------------------------------------------- unlinked content -
 #
-# Three kinds of real course content live in the cartridge but are reachable
-# from no module item: the orphaned QTI assessment handled above, wiki pages
-# (Finding 2), and -- discovered only by scanning for cross-reference tokens
-# that point nowhere linked -- an assignment and a discussion topic. All
-# three get the same treatment: archive them under their own unlinked-<kind>/
-# directory and link them from the index under "Not part of any module",
-# rather than silently dropping content the export actually carries.
+# Real course content lives in the cartridge but is reachable from no module
+# item: an orphaned QTI assessment, wiki pages, an entire announcement
+# stream (31 discussion topics -- module start dates, office hours, the
+# mid-course extension), and two assignments. Task 2's cartridge stage only
+# surfaces what's actually placed in a module, so every one of these is
+# found by scanning the manifest's full resource table, not by following
+# links from what's already linked. All four kinds get the same treatment:
+# parsed with cartridge.py's own per-type parser (never reimplemented),
+# archived under unlinked/<kind>/, and listed on a dedicated unlinked/
+# index.html -- rather than silently dropping content the export carries.
 
 def load_wiki_pages(cartridge_dir):
     """Every wiki_content/*.html file, keyed by its Canvas page identifier.
@@ -514,7 +520,7 @@ def find_unlinked_wiki_pages(course, wiki_pages):
 
 
 def render_unlinked_wiki_pages(pages, out_dir, gaps):
-    """Write each orphaned wiki page under unlinked-pages/, wrapped and
+    """Write each orphaned wiki page under unlinked/pages/, wrapped and
     token-rewritten exactly like every other page. Returns one
     {"ident", "slug", "title", "path"} dict per page actually written, for
     the cross-reference resolver and the index listing.
@@ -524,13 +530,13 @@ def render_unlinked_wiki_pages(pages, out_dir, gaps):
     for page in sorted(pages, key=lambda p: p["title"]):
         slug = slugify(page["title"]) or page["ident"]
         body = rewrite_filebase(
-            f"<h1>{html_mod.escape(page['title'])}</h1>\n{page['html']}", depth=1)
+            f"<h1>{html_mod.escape(page['title'])}</h1>\n{page['html']}", depth=UNLINKED_DEPTH)
         try:
-            out_subdir = out_dir / "unlinked-pages"
+            out_subdir = out_dir / "unlinked" / "pages"
             out_subdir.mkdir(parents=True, exist_ok=True)
             name = unique_filename(seen, slug)
             path = out_subdir / f"{name}.html"
-            path.write_text(page_shell(page["title"], body, depth=1))
+            path.write_text(page_shell(page["title"], body, depth=UNLINKED_DEPTH))
         except OSError as exc:
             gaps.append({"reason": f"unlinked page write failed: {exc}", "file": page.get("file")})
             continue
@@ -538,93 +544,215 @@ def render_unlinked_wiki_pages(pages, out_dir, gaps):
     return entries
 
 
-def _rendered_body_strings(course, wiki_pages, assessments, banks):
-    """Every HTML/prompt string that ends up somewhere in the rendered site.
-
-    Scanned in memory from what's already been parsed, not by re-walking the
-    cartridge -- a stale duplicate resource elsewhere in the export that
-    never reaches the output can't manufacture a phantom cross-reference.
-    """
-    for section in course["sections"]:
-        for item in section["items"]:
-            content = item.get("content")
-            if isinstance(content, dict):
-                for key in ("html", "text_html", "description_html"):
-                    value = content.get(key)
-                    if isinstance(value, str):
-                        yield value
-                for question in content.get("questions") or []:
-                    if isinstance(question, dict) and isinstance(question.get("prompt_html"), str):
-                        yield question["prompt_html"]
-    for page in wiki_pages.values():
-        yield page["html"]
-    for assessment in assessments:
-        for question in assessment["questions"]:
-            if question.get("prompt_html"):
-                yield question["prompt_html"]
-    for bank in banks:
-        for question in bank["questions"]:
-            if question.get("prompt_html"):
-                yield question["prompt_html"]
-
-
-def discover_unlinked_object_references(bodies, linked):
-    """Every (type, identifierref) a $CANVAS_OBJECT_REFERENCE$ token names
-    that points at a resource no module item reaches -- content the export
-    carries but Canvas never wired into a module, same class as the wiki
-    pages above. First-seen type wins for a given ref.
-    """
-    found = {}
-    for body in bodies:
-        for match in OBJECT_REF_SCAN_RE.finditer(body):
-            ref_type, ref = match.group(1), match.group(2)
-            if ref not in linked and ref not in found:
-                found[ref] = ref_type
-    return found
-
-
-def render_unlinked_object_references(refs, course, out_dir, gaps):
-    """Materialize each orphaned $CANVAS_OBJECT_REFERENCE$ target discovered
-    by discover_unlinked_object_references, reusing cartridge.py's own
-    per-type parsing (attach_item_content) rather than re-implementing it --
-    an unlinked assignment/discussion renders exactly like a linked one
-    would. A type this module doesn't know how to place (not one of
-    assignments/discussion_topics/quizzes -- Canvas never uses this token
-    for pages) is a gap, not a crash.
-
-    Returns one {"ident", "title", "kind_label", "path"} dict per item
-    actually written.
+def render_unlinked_assessments(assessments, out_dir, gaps):
+    """Write each orphaned QTI assessment (e.g. the one-off "Survey: Webinar
+    1") under unlinked/assessments/, rendered the same way a linked
+    survey-type quiz would be -- render_quiz never asserts a "correct"
+    answer for one, even though Canvas's own export includes one.
     """
     entries = []
     seen = {}
-    for ref, ref_type in sorted(refs.items()):
-        content_type = OBJECT_REF_TYPE_TO_CONTENT_TYPE.get(ref_type)
-        subdir_name = OBJECT_REF_TYPE_TO_SUBDIR.get(ref_type)
-        if not content_type or not subdir_name:
-            gaps.append({"reason": f"unsupported CANVAS_OBJECT_REFERENCE type {ref_type!r}",
-                        "ref": ref})
-            continue
-        item = {"identifierref": ref, "content_type": content_type}
+    for assessment in sorted(assessments, key=lambda a: a["title"]):
+        body = render_quiz({"title": assessment["title"], "description_html": "",
+                            "is_survey": True, "questions": assessment["questions"]})
+        body = rewrite_filebase(body, depth=UNLINKED_DEPTH)
         try:
-            attach_item_content(item, course["resources"], constants.CARTRIDGE_DIR)
-            content = item.get("content") or {}
-            title = content.get("title") or ref
-            body = rewrite_filebase(render_item_body({**item, "title": title}), depth=1)
-        except Exception as exc:  # a malformed/unreachable resource -- a gap, not a crash
-            gaps.append({"reason": str(exc), "ref": ref})
-            continue
-        try:
-            out_subdir = out_dir / subdir_name
+            out_subdir = out_dir / "unlinked" / "assessments"
             out_subdir.mkdir(parents=True, exist_ok=True)
-            name = unique_filename(seen.setdefault(subdir_name, {}), slugify(title) or "item")
+            slug = slugify(assessment["title"]) or "assessment"
+            name = unique_filename(seen, slug)
             path = out_subdir / f"{name}.html"
-            path.write_text(page_shell(title, body, depth=1))
+            path.write_text(page_shell(assessment["title"], body, depth=UNLINKED_DEPTH))
         except OSError as exc:
-            gaps.append({"reason": str(exc), "ref": ref})
+            gaps.append({"reason": f"unlinked assessment write failed: {exc}"})
             continue
-        entries.append({"ident": ref, "title": title,
-                        "kind_label": OBJECT_REF_TYPE_LABEL.get(ref_type, ref_type), "path": path})
+        entries.append({"ident": assessment["ident"], "title": assessment["title"], "path": path})
     return entries
+
+
+def load_manifest_dependencies(cartridge_dir):
+    """resource identifier -> its <dependency identifierref>, read straight
+    from imsmanifest.xml. cartridge.py's own manifest parser doesn't carry
+    this (course.json's "resources" only has type/href/files) -- scoped to
+    exactly what sorting the orphaned discussion stream needs below: finding
+    each discussion's Canvas-specific topicMeta companion. Never raises; a
+    missing/unparseable manifest just yields no dependencies, so the
+    discussions below still render, just in manifest order instead of
+    chronological order.
+    """
+    path = Path(cartridge_dir) / "imsmanifest.xml"
+    deps = {}
+    try:
+        root = ET.parse(path).getroot()
+    except (ET.ParseError, OSError):
+        return deps
+    for resource in root.iter(f"{IMSCP_NS}resource"):
+        dependency = resource.find(f"{IMSCP_NS}dependency")
+        ident = resource.get("identifier")
+        if dependency is not None and ident:
+            deps[ident] = dependency.get("identifierref")
+    return deps
+
+
+def load_topic_meta(cartridge_dir, ident):
+    """A discussion's Canvas topicMeta companion resource: `position` (its
+    place in the announcement stream -- this course's export carries one)
+    and `type` ("announcement" vs a standing "topic"/forum). Neither is in
+    the bare imsdt_xmlv1p1 XML cartridge.parse_discussion reads. Never
+    raises; a missing or unparseable companion just means "no position,
+    unknown type", not a crash.
+    """
+    try:
+        root = ET.parse(Path(cartridge_dir) / f"{ident}.xml").getroot()
+    except (ET.ParseError, OSError):
+        return {"position": None, "type": ""}
+    position_text = (root.findtext(f"{TOPIC_META_NS}position") or "").strip()
+    return {"position": int(position_text) if position_text.isdigit() else None,
+            "type": (root.findtext(f"{TOPIC_META_NS}type") or "").strip()}
+
+
+def load_unlinked_discussions(course, cartridge_dir):
+    """Every discussion_topic resource (imsdt_xmlv1p1) in the manifest
+    reachable from no module item -- Canvas's announcement stream plus
+    standing forums. Module items only cover what's actually placed in a
+    module, and announcements never are, so this scans course["resources"]
+    directly rather than following links from what's already linked.
+
+    Parsed with cartridge.parse_discussion, not reimplemented. Ordered by
+    the companion topicMeta's `position` -- the announcement stream's own
+    chronological order -- when available; a stable sort keeps manifest
+    order for anything without one (there's exactly one here: a standing
+    forum with no date, which sorts after the dated announcements).
+    Returns (entries, gaps).
+    """
+    linked = linked_identifierrefs(course)
+    dependencies = load_manifest_dependencies(cartridge_dir)
+    cartridge_dir = Path(cartridge_dir)
+    entries, gaps = [], []
+    for ident, resource in course["resources"].items():
+        if ident in linked or resource.get("type") != "imsdt_xmlv1p1":
+            continue
+        href = resource.get("href") or f"{ident}.xml"
+        try:
+            content = parse_discussion(cartridge_dir / href)
+        except (ET.ParseError, OSError) as exc:
+            gaps.append({"reason": str(exc), "ref": ident})
+            continue
+        dep_id = dependencies.get(ident)
+        meta = load_topic_meta(cartridge_dir, dep_id) if dep_id else {"position": None, "type": ""}
+        entries.append({"ident": ident, "title": content["title"] or ident,
+                        "text_html": content["text_html"],
+                        "position": meta["position"], "kind_meta": meta["type"]})
+    entries.sort(key=lambda e: (e["position"] is None, e["position"] or 0))
+    return entries, gaps
+
+
+def render_unlinked_discussions(entries, out_dir, gaps):
+    """Write each orphaned discussion/announcement under
+    unlinked/discussions/, in the chronological order
+    load_unlinked_discussions already sorted them into. Several
+    announcements share an exact title (four "Reminder: Faculty Webinar -
+    Professor Luis Perez Breva"s) -- the same per-directory de-dup
+    (unique_filename) already used everywhere else in this module handles
+    the collision.
+    """
+    written = []
+    seen = {}
+    for entry in entries:
+        item = {"title": entry["title"], "content": {"text_html": entry["text_html"]}}
+        body = rewrite_filebase(render_discussion(item), depth=UNLINKED_DEPTH)
+        try:
+            out_subdir = out_dir / "unlinked" / "discussions"
+            out_subdir.mkdir(parents=True, exist_ok=True)
+            slug = slugify(entry["title"]) or entry["ident"]
+            name = unique_filename(seen, slug)
+            path = out_subdir / f"{name}.html"
+            path.write_text(page_shell(entry["title"], body, depth=UNLINKED_DEPTH))
+        except OSError as exc:
+            gaps.append({"reason": f"unlinked discussion write failed: {exc}", "ref": entry["ident"]})
+            continue
+        written.append({"ident": entry["ident"], "title": entry["title"], "path": path})
+    return written
+
+
+def find_unlinked_assignments(course, cartridge_dir):
+    """Every assignment resource in the manifest reachable from no module
+    item. The export reuses the same resource type
+    (associatedcontent/imscc_xmlv1p1/learning-application-resource) for
+    several housekeeping companions too -- a discussion's topicMeta, a
+    quiz's assessment_meta.xml, the question-bank QTI files, the
+    course_settings manifest listing -- so a real assignment is identified
+    the same way cartridge.attach_item_content itself would resolve one: an
+    .html body file paired with an assignment_settings.xml. Parsed with
+    cartridge.parse_assignment, not reimplemented.
+    """
+    linked = linked_identifierrefs(course)
+    cartridge_dir = Path(cartridge_dir)
+    entries = []
+    for ident, resource in course["resources"].items():
+        if ident in linked:
+            continue
+        if resource.get("type") != "associatedcontent/imscc_xmlv1p1/learning-application-resource":
+            continue
+        files = resource.get("files") or []
+        settings = next((f for f in files if f.endswith("assignment_settings.xml")), None)
+        body_href = resource.get("href") or next((f for f in files if f.endswith(".html")), None)
+        if not settings or not body_href or not body_href.endswith(".html"):
+            continue  # a housekeeping companion (topicMeta/assessment_meta/etc.), not a real assignment
+        try:
+            content = parse_assignment(cartridge_dir / settings)
+            content["html"] = cartridge_read_body(cartridge_dir / body_href)
+        except (ET.ParseError, OSError):
+            continue
+        entries.append({"ident": ident, "title": content.get("title") or ident, "content": content})
+    return entries
+
+
+def render_unlinked_assignments(entries, out_dir, gaps):
+    """Write each orphaned assignment under unlinked/assignments/, rendered
+    exactly like a linked one (render_assignment)."""
+    written = []
+    seen = {}
+    for entry in sorted(entries, key=lambda e: e["title"]):
+        item = {"title": entry["title"], "content": entry["content"]}
+        body = rewrite_filebase(render_assignment(item), depth=UNLINKED_DEPTH)
+        try:
+            out_subdir = out_dir / "unlinked" / "assignments"
+            out_subdir.mkdir(parents=True, exist_ok=True)
+            slug = slugify(entry["title"]) or entry["ident"]
+            name = unique_filename(seen, slug)
+            path = out_subdir / f"{name}.html"
+            path.write_text(page_shell(entry["title"], body, depth=UNLINKED_DEPTH))
+        except OSError as exc:
+            gaps.append({"reason": f"unlinked assignment write failed: {exc}", "ref": entry["ident"]})
+            continue
+        written.append({"ident": entry["ident"], "title": entry["title"], "path": path})
+    return written
+
+
+def render_unlinked_index(categories, out_dir):
+    """The unlinked/index.html hub: everything in the cartridge that
+    reaches no module item, grouped by kind, with a short explanation of
+    why each group exists. `categories` is
+    [(heading, blurb, [(href, title), ...]), ...] in display order; a
+    category with no entries is skipped.
+    """
+    total = sum(len(rows) for _, _, rows in categories)
+    parts = ["<h1>Not part of any module</h1>",
+            f"<p>{total} items the export carries but no module in Canvas ever linked "
+            "to -- real course content (announcements, forum posts, pages, "
+            "assignments) that simply isn't reachable by clicking through the "
+            "course the way a student would.</p>"]
+    for heading, blurb, rows in categories:
+        if not rows:
+            continue
+        parts.append(f"<h2>{html_mod.escape(heading)} ({len(rows)})</h2>")
+        if blurb:
+            parts.append(f"<p>{html_mod.escape(blurb)}</p>")
+        items = "".join(f'<li><a href="{href}">{html_mod.escape(title)}</a></li>'
+                        for href, title in rows)
+        parts.append(f"<ul>{items}</ul>")
+    return "\n".join(parts)
 
 
 # ------------------------------------------------------- media placement --
@@ -809,9 +937,7 @@ def place_media(course, ledger, media_records, out_dir, build_dir=None):
 # orphans its old filename) without ever touching _build/ or _source/, the
 # read-only stage inputs that also happen to live under out_dir.
 
-OWNED_TOP_LEVEL = ("sections", "orientation", "closing", "files",
-                   "unlinked-assessments", "unlinked-pages",
-                   "unlinked-assignments", "unlinked-discussions", "unlinked-quizzes")
+OWNED_TOP_LEVEL = ("sections", "orientation", "closing", "files", "unlinked")
 OWNED_ROOT_FILES = ("index.html", "question-banks.html", "MANIFEST.json", "reveal.css")
 
 
@@ -1055,54 +1181,72 @@ def render_site(build_dir, out_dir):
     elif ledger is not None or media_records is not None:
         gaps.append({"reason": "ledger.json/media.json present but not in the expected shape"})
 
-    # Question banks and every kind of content reachable from no module:
-    # the orphaned QTI assessment, orphaned wiki pages (Finding 2), and any
-    # assignment/discussion/quiz only ever reached via a cross-reference
-    # token pointing at nothing linked.
+    # Every kind of content reachable from no module item: the orphaned QTI
+    # assessment, wiki pages, the announcement/discussion stream, and
+    # assignments -- all found by scanning the manifest's full resource
+    # table (see load_unlinked_discussions/find_unlinked_assignments), not
+    # by following links from what's already linked.
     assessments, banks, qti_gaps = load_non_cc_assessments(constants.CARTRIDGE_DIR)
     gaps.extend({"reason": g["reason"], "file": g.get("file")} for g in qti_gaps)
     wiki_pages, wiki_page_gaps = load_wiki_pages(constants.CARTRIDGE_DIR)
     gaps.extend({"reason": g["reason"], "file": g.get("file")} for g in wiki_page_gaps)
 
-    # rows: (category label, href relative to out_dir, title) -- grouped
-    # under "Not part of any module" on the index page, in this order.
-    unlinked_rows = []
-    unlinked_seen = {}
-    for assessment in find_unlinked_assessments(course, assessments):
-        unlinked_dir = out_dir / "unlinked-assessments"
-        try:
-            unlinked_dir.mkdir(parents=True, exist_ok=True)
-            base = slugify(assessment["title"]) or "assessment"
-            name = unique_filename(unlinked_seen, base)
-            body = render_quiz({"title": assessment["title"], "description_html": "",
-                                 "is_survey": True, "questions": assessment["questions"]})
-            body = rewrite_filebase(body, depth=1)
-            path = unlinked_dir / f"{name}.html"
-            path.write_text(page_shell(assessment["title"], body, depth=1))
-            written += 1
-            id_to_path[assessment["ident"]] = path
-            unlinked_rows.append(("Assessments", f"unlinked-assessments/{name}.html",
-                                  assessment["title"]))
-        except OSError as exc:
-            gaps.append({"reason": f"unlinked assessment write failed: {exc}"})
+    assessment_entries = render_unlinked_assessments(
+        find_unlinked_assessments(course, assessments), out_dir, gaps)
+    written += len(assessment_entries)
 
-    unlinked_wiki = find_unlinked_wiki_pages(course, wiki_pages)
-    wiki_entries = render_unlinked_wiki_pages(unlinked_wiki, out_dir, gaps)
+    wiki_entries = render_unlinked_wiki_pages(
+        find_unlinked_wiki_pages(course, wiki_pages), out_dir, gaps)
     written += len(wiki_entries)
+
+    discussion_records, discussion_gaps = load_unlinked_discussions(course, constants.CARTRIDGE_DIR)
+    gaps.extend(discussion_gaps)
+    discussion_entries = render_unlinked_discussions(discussion_records, out_dir, gaps)
+    written += len(discussion_entries)
+
+    assignment_entries = render_unlinked_assignments(
+        find_unlinked_assignments(course, constants.CARTRIDGE_DIR), out_dir, gaps)
+    written += len(assignment_entries)
+
+    for entry in assessment_entries:
+        id_to_path[entry["ident"]] = entry["path"]
     for entry in wiki_entries:
         id_to_path[entry["ident"]] = entry["path"]
         wiki_slug_to_path.setdefault(entry["slug"], entry["path"])
-        unlinked_rows.append(("Pages", str(entry["path"].relative_to(out_dir)), entry["title"]))
-
-    referenced = discover_unlinked_object_references(
-        _rendered_body_strings(course, wiki_pages, assessments, banks),
-        linked_identifierrefs(course))
-    object_entries = render_unlinked_object_references(referenced, course, out_dir, gaps)
-    written += len(object_entries)
-    for entry in object_entries:
+    for entry in discussion_entries:
         id_to_path[entry["ident"]] = entry["path"]
-        unlinked_rows.append((entry["kind_label"], str(entry["path"].relative_to(out_dir)),
-                              entry["title"]))
+    for entry in assignment_entries:
+        id_to_path[entry["ident"]] = entry["path"]
+
+    unlinked_total = (len(assessment_entries) + len(wiki_entries)
+                      + len(discussion_entries) + len(assignment_entries))
+    if unlinked_total:
+        unlinked_index_path = out_dir / "unlinked" / "index.html"
+        categories = [
+            ("Assessments", "",
+             [(relative_href(unlinked_index_path, e["path"]), e["title"])
+              for e in assessment_entries]),
+            ("Pages", "",
+             [(relative_href(unlinked_index_path, e["path"]), e["title"])
+              for e in wiki_entries]),
+            ("Discussions & announcements",
+             "The course's own announcement stream -- module start dates, office "
+             "hours, the mid-course deadline extension -- plus standing forums. "
+             "Sorted chronologically where the export records a position, "
+             "manifest order otherwise.",
+             [(relative_href(unlinked_index_path, e["path"]), e["title"])
+              for e in discussion_entries]),
+            ("Assignments", "",
+             [(relative_href(unlinked_index_path, e["path"]), e["title"])
+              for e in assignment_entries]),
+        ]
+        try:
+            (out_dir / "unlinked" / "index.html").write_text(
+                page_shell("Not part of any module",
+                          render_unlinked_index(categories, out_dir), depth=1))
+            written += 1
+        except OSError as exc:
+            gaps.append({"reason": f"unlinked/index.html write failed: {exc}"})
 
     if banks:
         try:
@@ -1115,21 +1259,12 @@ def render_site(build_dir, out_dir):
     index_parts = [f"<h1>{html_mod.escape(course.get('title', ''))}</h1>",
                    f"<p>{html_mod.escape(course.get('course_code', ''))}</p>",
                    f"<ol>{''.join(section_rows)}</ol>"]
-    if unlinked_rows:
-        index_parts.append("<h2>Not part of any module</h2>")
-        index_parts.append("<p>In the export manifest but never linked into a "
-                            "module in Canvas:</p>")
-        grouped, order = {}, []
-        for label, href, title in unlinked_rows:
-            if label not in grouped:
-                grouped[label] = []
-                order.append(label)
-            grouped[label].append((href, title))
-        for label in order:
-            index_parts.append(f"<h3>{html_mod.escape(label)}</h3>")
-            items = "".join(f'<li><a href="{href}">{html_mod.escape(title)}</a></li>'
-                            for href, title in grouped[label])
-            index_parts.append(f"<ul>{items}</ul>")
+    if unlinked_total:
+        index_parts.append(
+            f'<p><a href="unlinked/index.html">Content not part of any module</a> '
+            f'({unlinked_total} items -- announcements, forum posts, pages and '
+            f'assignments the export carries but no module in Canvas ever linked '
+            f'to)</p>')
     if banks:
         index_parts.append(
             f'<p><a href="question-banks.html">Question banks</a> '
