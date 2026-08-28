@@ -25,18 +25,52 @@ and rendering continues -- never abort the run over one bad item.
 """
 import html as html_mod
 import json
+import os
 import re
 import shutil
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from si_archive import constants, media
-from si_archive.cartridge import slugify
+from si_archive.cartridge import attach_item_content, slugify
+from si_archive.cartridge import _read_body as cartridge_read_body
 
 FILEBASE_RE = re.compile(r"%24IMS-CC-FILEBASE%24(/[^\"'\s>]*)")
 CANVAS_QS_RE = re.compile(r"\?(?:canvas_|amp;canvas_)[^\"'\s>]*")
 ELUCIDAT_CODE_RE = re.compile(r"elucidat\.com/course/([a-f0-9-]+)")
 ELUCIDAT_IFRAME_RE = re.compile(r"<iframe[^>]*elucidat\.com[^>]*>.*?</iframe>", re.I | re.S)
+
+# Canvas's other internal cross-reference tokens -- URL-encoded exactly like
+# $IMS-CC-FILEBASE$, but naming another piece of the *course* (a wiki page,
+# an assignment/discussion/quiz, or a course-level route) rather than a
+# bundled file. Unlike FILEBASE, resolving them needs to know another page's
+# final output path, which isn't knowable until the whole site has been
+# written -- see resolve_cross_reference_tokens.
+WIKI_HREF_RE = re.compile(r'\shref="[^"]*%24WIKI_REFERENCE%24/pages/([^"?]*)[^"]*"')
+OBJECT_HREF_RE = re.compile(
+    r'\shref="[^"]*%24CANVAS_OBJECT_REFERENCE%24/[a-z_]+/([^"?]*)[^"]*"')
+COURSE_HREF_RE = re.compile(r'\shref="[^"]*%24CANVAS_COURSE_REFERENCE%24/([^"?]*)[^"]*"')
+OBJECT_REF_SCAN_RE = re.compile(r'%24CANVAS_OBJECT_REFERENCE%24/([a-z_]+)/([^"\'\s>?]*)')
+
+# Elucidat's own player-template variables, never substituted in a baked
+# static export ({{next.url}}, {{navigation.first.url}}, ...). They sit in
+# player chrome reveal.css already hides.
+TEMPLATE_ATTR_RE = re.compile(r'\s(?:href|src)="[^"]*\{\{[^"]*"')
+
+IDENTIFIER_META_RE = re.compile(r'<meta name="identifier" content="([^"]*)"')
+TITLE_TAG_RE = re.compile(r"<title>([^<]*)</title>")
+
+OBJECT_REF_TYPE_TO_CONTENT_TYPE = {
+    "assignments": "Assignment", "discussion_topics": "DiscussionTopic",
+    "quizzes": "Quizzes::Quiz",
+}
+OBJECT_REF_TYPE_TO_SUBDIR = {
+    "assignments": "unlinked-assignments", "discussion_topics": "unlinked-discussions",
+    "quizzes": "unlinked-quizzes",
+}
+OBJECT_REF_TYPE_LABEL = {
+    "assignments": "Assignments", "discussion_topics": "Discussions", "quizzes": "Quizzes",
+}
 
 QTI = "{http://www.imsglobal.org/xsd/ims_qtiasiv1p2}"
 
@@ -82,6 +116,31 @@ def rewrite_filebase(page_html, depth):
 def page_shell(title, body, depth, nav_html=""):
     return SHELL.format(title=html_mod.escape(title), body=body,
                          nav=nav_html, prefix="../" * depth)
+
+
+def strip_template_placeholders(html_text):
+    """Drop href/src attributes still holding an unsubstituted Elucidat
+    player-template variable (e.g. {{next.url}}, {{navigation.first.url}}).
+
+    They sit in player chrome reveal.css already hides -- invisible and
+    harmless to a reader -- but each one is a dead link/asset reference that
+    would otherwise register as broken. The element and its other markup
+    are kept, for provenance; only the dead attribute goes. Applied at
+    render time to the *copy* written under sections/.../elucidat/ -- the
+    raw mirror under _source/ is never touched.
+    """
+    return TEMPLATE_ATTR_RE.sub("", html_text)
+
+
+def relative_href(from_file, to_file):
+    """POSIX-style relative path from one output HTML file to another.
+
+    Used by the cross-reference resolver, where (unlike the fixed-depth
+    $IMS-CC-FILEBASE$ rewrite) the target can be any page anywhere in the
+    site, so a simple "../" * depth prefix isn't enough -- this is exact for
+    any pair of files regardless of nesting depth.
+    """
+    return Path(os.path.relpath(to_file, start=Path(from_file).parent)).as_posix()
 
 
 def unique_filename(seen, base):
@@ -299,6 +358,7 @@ def copy_elucidat_project(project, key, section_dirname, build_dir, out_dir):
         except OSError as exc:
             gaps.append({"project": key, "page": slug, "reason": str(exc)})
             continue
+        body = strip_template_placeholders(body)
         try:
             (out_section / f"{slug}.html").write_text(
                 page_shell(page.get("name") or slug, body, depth=3))
@@ -364,12 +424,21 @@ def load_non_cc_assessments(cartridge_dir):
     return assessments, banks, gaps
 
 
+def linked_identifierrefs(course):
+    """Every identifierref reachable from some module item -- the set that
+    orphan-detection (assessments, wiki pages, cross-referenced objects) is
+    defined against: "linked" means "some module item points at it",
+    nothing more.
+    """
+    return {item.get("identifierref") for section in course["sections"]
+            for item in section["items"] if item.get("identifierref")}
+
+
 def find_unlinked_assessments(course, assessments):
     """Assessments in the manifest but reachable from no module item -- the
     Task 2 cartridge stage never renders these into course.json at all.
     """
-    linked = {item.get("identifierref") for section in course["sections"]
-              for item in section["items"] if item.get("identifierref")}
+    linked = linked_identifierrefs(course)
     return [a for a in assessments if a["ident"] not in linked]
 
 
@@ -389,6 +458,173 @@ def render_question_banks(banks):
                     f"<li>{html_mod.escape(o)}</li>" for o in question["options"])
                 parts.append(f"<ol>{items}</ol>")
     return "\n".join(parts)
+
+
+# ------------------------------------------------------- unlinked content -
+#
+# Three kinds of real course content live in the cartridge but are reachable
+# from no module item: the orphaned QTI assessment handled above, wiki pages
+# (Finding 2), and -- discovered only by scanning for cross-reference tokens
+# that point nowhere linked -- an assignment and a discussion topic. All
+# three get the same treatment: archive them under their own unlinked-<kind>/
+# directory and link them from the index under "Not part of any module",
+# rather than silently dropping content the export actually carries.
+
+def load_wiki_pages(cartridge_dir):
+    """Every wiki_content/*.html file, keyed by its Canvas page identifier.
+
+    Includes both pages reachable from a module item and pages that are not
+    -- the latter are exactly what find_unlinked_wiki_pages is for. A file
+    that can't be read, or carries no <meta name="identifier">, is a gap,
+    never a crash.
+    """
+    directory = Path(cartridge_dir) / "wiki_content"
+    pages, gaps = {}, []
+    if not directory.exists():
+        return pages, gaps
+    for path in sorted(directory.glob("*.html")):
+        try:
+            raw = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            gaps.append({"file": path.name, "reason": str(exc)})
+            continue
+        ident_match = IDENTIFIER_META_RE.search(raw)
+        if not ident_match:
+            gaps.append({"file": path.name, "reason": "no identifier meta tag"})
+            continue
+        title_match = TITLE_TAG_RE.search(raw)
+        title = html_mod.unescape(title_match.group(1)) if title_match else path.stem
+        try:
+            body = cartridge_read_body(path)
+        except OSError as exc:
+            gaps.append({"file": path.name, "reason": str(exc)})
+            continue
+        pages[ident_match.group(1)] = {"ident": ident_match.group(1), "title": title,
+                                       "html": body, "file": path.name}
+    return pages, gaps
+
+
+def find_unlinked_wiki_pages(course, wiki_pages):
+    """wiki_content pages the cartridge carries but no module item reaches
+    -- the same "in the manifest, reachable from nothing" class as the
+    orphaned assessment above, just for a different resource type.
+    """
+    linked = linked_identifierrefs(course)
+    return [p for ident, p in wiki_pages.items() if ident not in linked]
+
+
+def render_unlinked_wiki_pages(pages, out_dir, gaps):
+    """Write each orphaned wiki page under unlinked-pages/, wrapped and
+    token-rewritten exactly like every other page. Returns one
+    {"ident", "slug", "title", "path"} dict per page actually written, for
+    the cross-reference resolver and the index listing.
+    """
+    entries = []
+    seen = {}
+    for page in sorted(pages, key=lambda p: p["title"]):
+        slug = slugify(page["title"]) or page["ident"]
+        body = rewrite_filebase(
+            f"<h1>{html_mod.escape(page['title'])}</h1>\n{page['html']}", depth=1)
+        try:
+            out_subdir = out_dir / "unlinked-pages"
+            out_subdir.mkdir(parents=True, exist_ok=True)
+            name = unique_filename(seen, slug)
+            path = out_subdir / f"{name}.html"
+            path.write_text(page_shell(page["title"], body, depth=1))
+        except OSError as exc:
+            gaps.append({"reason": f"unlinked page write failed: {exc}", "file": page.get("file")})
+            continue
+        entries.append({"ident": page["ident"], "slug": slug, "title": page["title"], "path": path})
+    return entries
+
+
+def _rendered_body_strings(course, wiki_pages, assessments, banks):
+    """Every HTML/prompt string that ends up somewhere in the rendered site.
+
+    Scanned in memory from what's already been parsed, not by re-walking the
+    cartridge -- a stale duplicate resource elsewhere in the export that
+    never reaches the output can't manufacture a phantom cross-reference.
+    """
+    for section in course["sections"]:
+        for item in section["items"]:
+            content = item.get("content")
+            if isinstance(content, dict):
+                for key in ("html", "text_html", "description_html"):
+                    value = content.get(key)
+                    if isinstance(value, str):
+                        yield value
+                for question in content.get("questions") or []:
+                    if isinstance(question, dict) and isinstance(question.get("prompt_html"), str):
+                        yield question["prompt_html"]
+    for page in wiki_pages.values():
+        yield page["html"]
+    for assessment in assessments:
+        for question in assessment["questions"]:
+            if question.get("prompt_html"):
+                yield question["prompt_html"]
+    for bank in banks:
+        for question in bank["questions"]:
+            if question.get("prompt_html"):
+                yield question["prompt_html"]
+
+
+def discover_unlinked_object_references(bodies, linked):
+    """Every (type, identifierref) a $CANVAS_OBJECT_REFERENCE$ token names
+    that points at a resource no module item reaches -- content the export
+    carries but Canvas never wired into a module, same class as the wiki
+    pages above. First-seen type wins for a given ref.
+    """
+    found = {}
+    for body in bodies:
+        for match in OBJECT_REF_SCAN_RE.finditer(body):
+            ref_type, ref = match.group(1), match.group(2)
+            if ref not in linked and ref not in found:
+                found[ref] = ref_type
+    return found
+
+
+def render_unlinked_object_references(refs, course, out_dir, gaps):
+    """Materialize each orphaned $CANVAS_OBJECT_REFERENCE$ target discovered
+    by discover_unlinked_object_references, reusing cartridge.py's own
+    per-type parsing (attach_item_content) rather than re-implementing it --
+    an unlinked assignment/discussion renders exactly like a linked one
+    would. A type this module doesn't know how to place (not one of
+    assignments/discussion_topics/quizzes -- Canvas never uses this token
+    for pages) is a gap, not a crash.
+
+    Returns one {"ident", "title", "kind_label", "path"} dict per item
+    actually written.
+    """
+    entries = []
+    seen = {}
+    for ref, ref_type in sorted(refs.items()):
+        content_type = OBJECT_REF_TYPE_TO_CONTENT_TYPE.get(ref_type)
+        subdir_name = OBJECT_REF_TYPE_TO_SUBDIR.get(ref_type)
+        if not content_type or not subdir_name:
+            gaps.append({"reason": f"unsupported CANVAS_OBJECT_REFERENCE type {ref_type!r}",
+                        "ref": ref})
+            continue
+        item = {"identifierref": ref, "content_type": content_type}
+        try:
+            attach_item_content(item, course["resources"], constants.CARTRIDGE_DIR)
+            content = item.get("content") or {}
+            title = content.get("title") or ref
+            body = rewrite_filebase(render_item_body({**item, "title": title}), depth=1)
+        except Exception as exc:  # a malformed/unreachable resource -- a gap, not a crash
+            gaps.append({"reason": str(exc), "ref": ref})
+            continue
+        try:
+            out_subdir = out_dir / subdir_name
+            out_subdir.mkdir(parents=True, exist_ok=True)
+            name = unique_filename(seen.setdefault(subdir_name, {}), slugify(title) or "item")
+            path = out_subdir / f"{name}.html"
+            path.write_text(page_shell(title, body, depth=1))
+        except OSError as exc:
+            gaps.append({"reason": str(exc), "ref": ref})
+            continue
+        entries.append({"ident": ref, "title": title,
+                        "kind_label": OBJECT_REF_TYPE_LABEL.get(ref_type, ref_type), "path": path})
+    return entries
 
 
 # ------------------------------------------------------- media placement --
@@ -565,12 +801,149 @@ def place_media(course, ledger, media_records, out_dir, build_dir=None):
     return placed, captions
 
 
+# --------------------------------------------------- output housekeeping --
+#
+# Everything render_site itself creates, named explicitly rather than
+# inferred -- so a clean-before-write step can remove a previous run's
+# output (a stray file left by a since-fixed bug, a renamed slug that
+# orphans its old filename) without ever touching _build/ or _source/, the
+# read-only stage inputs that also happen to live under out_dir.
+
+OWNED_TOP_LEVEL = ("sections", "orientation", "closing", "files",
+                   "unlinked-assessments", "unlinked-pages",
+                   "unlinked-assignments", "unlinked-discussions", "unlinked-quizzes")
+OWNED_ROOT_FILES = ("index.html", "question-banks.html", "MANIFEST.json", "reveal.css")
+
+
+def clean_owned_output(out_dir):
+    """Remove every directory/file a previous render_site run could have
+    written, before this run writes anything. render_site only ever
+    adds/overwrites; without this, a file a previous (possibly buggy or
+    since-renamed) run produced can survive indefinitely. Failures to
+    remove are swallowed, not fatal -- the write pass below will still
+    overwrite what it can.
+    """
+    out_dir = Path(out_dir)
+    for name in OWNED_TOP_LEVEL:
+        path = out_dir / name
+        if path.exists():
+            try:
+                shutil.rmtree(path)
+            except OSError:
+                pass
+    for name in OWNED_ROOT_FILES:
+        path = out_dir / name
+        if path.exists():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+
+def _owned_html_files(out_dir):
+    """Every .html file render_site owns -- explicitly excludes _build/ and
+    _source/ (the read-only stage inputs) by construction: they're never in
+    OWNED_TOP_LEVEL/OWNED_ROOT_FILES, so a blind out_dir.rglob("*.html")
+    that would also catch the raw Elucidat mirror under
+    _source/elucidat/**/*.html is never used.
+    """
+    out_dir = Path(out_dir)
+    for name in OWNED_TOP_LEVEL:
+        base = out_dir / name
+        if base.exists():
+            yield from sorted(base.rglob("*.html"))
+    for name in OWNED_ROOT_FILES:
+        path = out_dir / name
+        if path.suffix == ".html" and path.exists():
+            yield path
+
+
+def resolve_cross_reference_tokens(out_dir, registries, gaps):
+    """Rewrite $WIKI_REFERENCE$, $CANVAS_OBJECT_REFERENCE$ and
+    $CANVAS_COURSE_REFERENCE$ -- Canvas's internal cross-reference tokens,
+    URL-encoded exactly like $IMS-CC-FILEBASE$ -- into working relative
+    links.
+
+    Must run as a final pass over the fully-written site, not inline while
+    each page's body is built: a page can reference any other page anywhere
+    in the course, including one that hasn't been rendered yet, so the
+    target's final path isn't knowable until every page has been written.
+
+    `registries` is {"identifierrefs": {ref: Path}, "wiki_slugs": {slug: Path}}.
+    Anything that can't be resolved has its href attribute stripped -- the
+    element and its text/image content are kept, for provenance -- and is
+    recorded as a gap. Never leaves a dead $TOKEN$ in the output.
+
+    Returns the number of files actually rewritten.
+    """
+    out_dir = Path(out_dir)
+    identifierrefs = registries["identifierrefs"]
+    wiki_slugs = registries["wiki_slugs"]
+    index_path = out_dir / "index.html"
+    fixed = 0
+
+    for html_file in _owned_html_files(out_dir):
+        try:
+            text = html_file.read_text(encoding="utf-8")
+        except OSError as exc:
+            gaps.append({"reason": str(exc), "file": str(html_file)})
+            continue
+        label = str(html_file.relative_to(out_dir))
+        changed = False
+
+        def resolve_wiki(match, _label=label):
+            nonlocal changed
+            slug = strip_canvas_query(match.group(1))
+            target = wiki_slugs.get(slug)
+            changed = True
+            if target is None:
+                gaps.append({"page": _label, "token": "WIKI_REFERENCE", "target": slug})
+                return ""
+            return f' href="{relative_href(html_file, target)}"'
+
+        def resolve_object(match, _label=label):
+            nonlocal changed
+            ref = strip_canvas_query(match.group(1))
+            target = identifierrefs.get(ref)
+            changed = True
+            if target is None:
+                gaps.append({"page": _label, "token": "CANVAS_OBJECT_REFERENCE", "target": ref})
+                return ""
+            return f' href="{relative_href(html_file, target)}"'
+
+        def resolve_course(match, _label=label):
+            nonlocal changed
+            path = strip_canvas_query(match.group(1))
+            changed = True
+            if path in ("assignments", "assignments/syllabus"):
+                return f' href="{relative_href(html_file, index_path)}"'
+            gaps.append({"page": _label, "token": "CANVAS_COURSE_REFERENCE", "target": path})
+            return ""
+
+        text = WIKI_HREF_RE.sub(resolve_wiki, text)
+        text = OBJECT_HREF_RE.sub(resolve_object, text)
+        text = COURSE_HREF_RE.sub(resolve_course, text)
+
+        if changed:
+            try:
+                html_file.write_text(text, encoding="utf-8")
+                fixed += 1
+            except OSError as exc:
+                gaps.append({"reason": str(exc), "file": str(html_file)})
+    return fixed
+
+
 # ------------------------------------------------------------ site build --
 
 def render_site(build_dir, out_dir):
     build_dir, out_dir = Path(build_dir), Path(out_dir)
     course = json.loads((build_dir / "course.json").read_text())
     elucidat_projects = _load_json_safe(build_dir / "elucidat.json", default={})
+
+    # render_site only ever adds/overwrites; without an explicit clean step a
+    # file from a previous (possibly buggy, or since-renamed) run survives
+    # indefinitely. Never touches _build/ or _source/ -- see OWNED_TOP_LEVEL.
+    clean_owned_output(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -584,6 +957,12 @@ def render_site(build_dir, out_dir):
     written = 0
     gaps = []
     section_rows = []
+    # identifierref -> written Path, and wiki page slug -> written Path --
+    # fed by every module item as it's written, then by every orphaned
+    # page/object below. Consulted only at the very end, once the whole
+    # site exists, by resolve_cross_reference_tokens.
+    id_to_path = {}
+    wiki_slug_to_path = {}
 
     for section in course["sections"]:
         dirname = section["dirname"]
@@ -632,6 +1011,12 @@ def render_site(build_dir, out_dir):
                 continue
             written += 1
             item_links.append((kind, f"{subdir_name}/{filename}", item.get("title", "")))
+            written_path = subdir / filename
+            ref = item.get("identifierref")
+            if ref:
+                id_to_path[ref] = written_path
+            if kind == "page" and item.get("slug"):
+                wiki_slug_to_path.setdefault(item["slug"], written_path)
 
         index_body = render_section_index(section, item_links)
         try:
@@ -670,9 +1055,17 @@ def render_site(build_dir, out_dir):
     elif ledger is not None or media_records is not None:
         gaps.append({"reason": "ledger.json/media.json present but not in the expected shape"})
 
-    # Question banks and the one assessment reachable from no module.
+    # Question banks and every kind of content reachable from no module:
+    # the orphaned QTI assessment, orphaned wiki pages (Finding 2), and any
+    # assignment/discussion/quiz only ever reached via a cross-reference
+    # token pointing at nothing linked.
     assessments, banks, qti_gaps = load_non_cc_assessments(constants.CARTRIDGE_DIR)
     gaps.extend({"reason": g["reason"], "file": g.get("file")} for g in qti_gaps)
+    wiki_pages, wiki_page_gaps = load_wiki_pages(constants.CARTRIDGE_DIR)
+    gaps.extend({"reason": g["reason"], "file": g.get("file")} for g in wiki_page_gaps)
+
+    # rows: (category label, href relative to out_dir, title) -- grouped
+    # under "Not part of any module" on the index page, in this order.
     unlinked_rows = []
     unlinked_seen = {}
     for assessment in find_unlinked_assessments(course, assessments):
@@ -683,14 +1076,33 @@ def render_site(build_dir, out_dir):
             name = unique_filename(unlinked_seen, base)
             body = render_quiz({"title": assessment["title"], "description_html": "",
                                  "is_survey": True, "questions": assessment["questions"]})
-            (unlinked_dir / f"{name}.html").write_text(
-                page_shell(assessment["title"], body, depth=1))
+            body = rewrite_filebase(body, depth=1)
+            path = unlinked_dir / f"{name}.html"
+            path.write_text(page_shell(assessment["title"], body, depth=1))
             written += 1
-            unlinked_rows.append(
-                f'<li><a href="unlinked-assessments/{name}.html">'
-                f'{html_mod.escape(assessment["title"])}</a></li>')
+            id_to_path[assessment["ident"]] = path
+            unlinked_rows.append(("Assessments", f"unlinked-assessments/{name}.html",
+                                  assessment["title"]))
         except OSError as exc:
             gaps.append({"reason": f"unlinked assessment write failed: {exc}"})
+
+    unlinked_wiki = find_unlinked_wiki_pages(course, wiki_pages)
+    wiki_entries = render_unlinked_wiki_pages(unlinked_wiki, out_dir, gaps)
+    written += len(wiki_entries)
+    for entry in wiki_entries:
+        id_to_path[entry["ident"]] = entry["path"]
+        wiki_slug_to_path.setdefault(entry["slug"], entry["path"])
+        unlinked_rows.append(("Pages", str(entry["path"].relative_to(out_dir)), entry["title"]))
+
+    referenced = discover_unlinked_object_references(
+        _rendered_body_strings(course, wiki_pages, assessments, banks),
+        linked_identifierrefs(course))
+    object_entries = render_unlinked_object_references(referenced, course, out_dir, gaps)
+    written += len(object_entries)
+    for entry in object_entries:
+        id_to_path[entry["ident"]] = entry["path"]
+        unlinked_rows.append((entry["kind_label"], str(entry["path"].relative_to(out_dir)),
+                              entry["title"]))
 
     if banks:
         try:
@@ -707,7 +1119,17 @@ def render_site(build_dir, out_dir):
         index_parts.append("<h2>Not part of any module</h2>")
         index_parts.append("<p>In the export manifest but never linked into a "
                             "module in Canvas:</p>")
-        index_parts.append(f"<ul>{''.join(unlinked_rows)}</ul>")
+        grouped, order = {}, []
+        for label, href, title in unlinked_rows:
+            if label not in grouped:
+                grouped[label] = []
+                order.append(label)
+            grouped[label].append((href, title))
+        for label in order:
+            index_parts.append(f"<h3>{html_mod.escape(label)}</h3>")
+            items = "".join(f'<li><a href="{href}">{html_mod.escape(title)}</a></li>'
+                            for href, title in grouped[label])
+            index_parts.append(f"<ul>{items}</ul>")
     if banks:
         index_parts.append(
             f'<p><a href="question-banks.html">Question banks</a> '
@@ -720,5 +1142,12 @@ def render_site(build_dir, out_dir):
     except OSError as exc:
         gaps.append({"reason": f"index.html write failed: {exc}"})
 
+    # Final pass: every page in the site now exists at its final path, so
+    # $WIKI_REFERENCE$/$CANVAS_OBJECT_REFERENCE$/$CANVAS_COURSE_REFERENCE$
+    # tokens can be resolved. Must run last -- see resolve_cross_reference_tokens.
+    registries = {"identifierrefs": id_to_path, "wiki_slugs": wiki_slug_to_path}
+    links_fixed = resolve_cross_reference_tokens(out_dir, registries, gaps)
+
     return {"pages_written": written, "sections": len(course["sections"]),
-            "media_placed": placed, "gaps": len(gaps), "gap_details": gaps}
+            "media_placed": placed, "gaps": len(gaps), "gap_details": gaps,
+            "links_fixed": links_fixed}

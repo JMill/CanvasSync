@@ -119,7 +119,8 @@ def run_stage(name, args):
         from si_archive import render
         stats = render.render_site(out / "_build", out)
         print(f"    {stats['pages_written']} pages, {stats['sections']} sections, "
-              f"{stats['media_placed']} media files, {stats['gaps']} gaps")
+              f"{stats['media_placed']} media files, {stats['gaps']} gaps, "
+              f"{stats['links_fixed']} cross-reference links resolved")
         return
 
     raise NotImplementedError(f"stage {name!r} not yet implemented")

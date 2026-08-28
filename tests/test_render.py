@@ -619,3 +619,416 @@ def test_render_site_survives_ledger_json_with_the_wrong_top_level_type(tmp_path
 def test_collect_canonical_videos_skips_a_file_group_missing_its_canonical_key():
     ledger = {"files": [{"aliases": ["/x/a.mp4"]}], "renditions": [], "online_only": []}
     assert render.collect_canonical_videos(ledger) == []
+
+
+# ------------------------------------------------- Elucidat template vars -
+
+def test_strip_template_placeholders_drops_unsubstituted_href_and_src():
+    html = ('<a href="{{next.url}}">Next</a> '
+            '<a href="{{navigation.first.url}}">First</a> '
+            '<img src="{{some.var}}">')
+    out = render.strip_template_placeholders(html)
+    assert "{{" not in out
+    assert "<a>Next</a>" in out
+    assert "<a>First</a>" in out
+    assert "<img>" in out
+
+
+def test_strip_template_placeholders_keeps_a_real_link_untouched():
+    html = '<a href="../elucidat/02-page.html">Real</a>'
+    assert render.strip_template_placeholders(html) == html
+
+
+def test_copy_elucidat_project_strips_template_placeholders_from_the_copy(tmp_path):
+    build_dir = tmp_path / "_build"
+    source = tmp_path / "_source" / "elucidat" / "M1"
+    source.mkdir(parents=True)
+    raw = '<a href="{{previous.url}}">Prev</a><div>content</div>'
+    (source / "01-page.html").write_text(raw)
+    project = {"pages": [{"slug": "01-page", "name": "Page One"}]}
+
+    render.copy_elucidat_project(project, "M1", "04-s", build_dir, tmp_path / "out")
+
+    # The raw mirror under _source/ must never be touched.
+    assert (source / "01-page.html").read_text() == raw
+    out_page = (tmp_path / "out" / "sections" / "04-s" / "elucidat" / "01-page.html").read_text()
+    assert "{{" not in out_page
+    assert "content" in out_page
+
+
+# ---------------------------------------------------- cross-reference: --
+# $WIKI_REFERENCE$, $CANVAS_OBJECT_REFERENCE$, $CANVAS_COURSE_REFERENCE$
+
+def test_relative_href_computes_a_correct_relative_path(tmp_path):
+    a = tmp_path / "sections" / "01-s" / "pages" / "a.html"
+    b = tmp_path / "sections" / "02-t" / "quizzes" / "b.html"
+    assert render.relative_href(a, b) == "../../02-t/quizzes/b.html"
+
+
+def test_load_wiki_pages_indexes_by_canvas_identifier(tmp_path):
+    wc = tmp_path / "wiki_content"
+    wc.mkdir()
+    (wc / "captains-log.html").write_text(
+        '<html><head><title>Captains Log</title>'
+        '<meta name="identifier" content="g-cl"/></head>'
+        '<body><p>Ahoy</p></body></html>')
+
+    pages, gaps = render.load_wiki_pages(tmp_path)
+
+    assert gaps == []
+    assert set(pages) == {"g-cl"}
+    assert pages["g-cl"]["title"] == "Captains Log"
+    assert "<p>Ahoy</p>" in pages["g-cl"]["html"]
+
+
+def test_load_wiki_pages_records_a_gap_for_a_page_with_no_identifier(tmp_path):
+    wc = tmp_path / "wiki_content"
+    wc.mkdir()
+    (wc / "no-id.html").write_text("<html><head><title>X</title></head><body>x</body></html>")
+
+    pages, gaps = render.load_wiki_pages(tmp_path)
+
+    assert pages == {}
+    assert len(gaps) == 1 and gaps[0]["file"] == "no-id.html"
+
+
+def test_load_wiki_pages_returns_empty_when_wiki_content_is_absent(tmp_path):
+    assert render.load_wiki_pages(tmp_path) == ({}, [])
+
+
+def test_find_unlinked_wiki_pages_returns_only_pages_no_item_reaches():
+    course = {"sections": [{"items": [{"identifierref": "g-linked"}]}]}
+    pages = {"g-linked": {"ident": "g-linked", "title": "Linked"},
+             "g-orphan": {"ident": "g-orphan", "title": "Orphan"}}
+    unlinked = render.find_unlinked_wiki_pages(course, pages)
+    assert [p["title"] for p in unlinked] == ["Orphan"]
+
+
+def test_render_unlinked_wiki_pages_writes_a_page_and_rewrites_filebase(tmp_path):
+    pages = [{"ident": "g1", "title": "Help",
+              "html": '<img src="%24IMS-CC-FILEBASE%24/h.png?canvas_download=1">',
+              "file": "help.html"}]
+    gaps = []
+
+    entries = render.render_unlinked_wiki_pages(pages, tmp_path, gaps)
+
+    assert gaps == []
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["slug"] == "help"
+    assert entry["path"] == tmp_path / "unlinked-pages" / "help.html"
+    out = entry["path"].read_text()
+    assert "IMS-CC-FILEBASE" not in out
+    assert "../files/h.png" in out
+
+
+def test_render_unlinked_wiki_pages_deduplicates_a_slug_collision(tmp_path):
+    pages = [{"ident": "g1", "title": "Info", "html": "<p>a</p>", "file": "a.html"},
+             {"ident": "g2", "title": "Info", "html": "<p>b</p>", "file": "b.html"}]
+    entries = render.render_unlinked_wiki_pages(pages, tmp_path, [])
+    assert sorted(e["path"].name for e in entries) == ["info-2.html", "info.html"]
+
+
+def test_rendered_body_strings_covers_items_wiki_pages_assessments_and_banks():
+    course = {"sections": [{"items": [
+        {"content": {"html": "<p>item-html</p>"}},
+        {"content": {"questions": [{"prompt_html": "<p>item-question</p>"}]}},
+    ]}]}
+    wiki_pages = {"g1": {"html": "<p>wiki-html</p>"}}
+    assessments = [{"questions": [{"prompt_html": "<p>assessment-question</p>"}]}]
+    banks = [{"questions": [{"prompt_html": "<p>bank-question</p>"}]}]
+    bodies = list(render._rendered_body_strings(course, wiki_pages, assessments, banks))
+    assert "<p>item-html</p>" in bodies
+    assert "<p>item-question</p>" in bodies
+    assert "<p>wiki-html</p>" in bodies
+    assert "<p>assessment-question</p>" in bodies
+    assert "<p>bank-question</p>" in bodies
+
+
+def test_discover_unlinked_object_references_skips_targets_a_module_reaches():
+    bodies = ['<a href="%24CANVAS_OBJECT_REFERENCE%24/assignments/g-orphan">x</a>',
+              '<a href="%24CANVAS_OBJECT_REFERENCE%24/quizzes/g-linked">y</a>']
+    refs = render.discover_unlinked_object_references(bodies, linked={"g-linked"})
+    assert refs == {"g-orphan": "assignments"}
+
+
+def test_render_unlinked_object_references_reuses_cartridge_parsing(tmp_path, monkeypatch):
+    cart = tmp_path / "cart"
+    resdir = cart / "g-orphan"
+    resdir.mkdir(parents=True)
+    (resdir / "assignment_settings.xml").write_text(
+        '<assignment xmlns="http://canvas.instructure.com/xsd/cccv1p0">'
+        '<title>Mud Cards</title><points_possible>0</points_possible>'
+        '<submission_types>online_text_entry</submission_types></assignment>')
+    (resdir / "mud-cards.html").write_text("<html><body><p>Ask a question</p></body></html>")
+    monkeypatch.setattr(render.constants, "CARTRIDGE_DIR", str(cart))
+    course = {"resources": {"g-orphan": {
+        "type": "associatedcontent/imscc_xmlv1p1/learning-application-resource",
+        "href": "g-orphan/mud-cards.html",
+        "files": ["g-orphan/mud-cards.html", "g-orphan/assignment_settings.xml"]}}}
+    gaps = []
+
+    entries = render.render_unlinked_object_references(
+        {"g-orphan": "assignments"}, course, tmp_path / "out", gaps)
+
+    assert gaps == []
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["ident"] == "g-orphan"
+    assert entry["title"] == "Mud Cards"
+    assert entry["kind_label"] == "Assignments"
+    out = (tmp_path / "out" / "unlinked-assignments" / "mud-cards.html").read_text()
+    assert "Ask a question" in out
+
+
+def test_render_unlinked_object_references_records_a_gap_for_an_unsupported_type(tmp_path):
+    gaps = []
+    entries = render.render_unlinked_object_references(
+        {"g-x": "modules"}, {"resources": {}}, tmp_path / "out", gaps)
+    assert entries == []
+    assert gaps and "unsupported" in gaps[0]["reason"]
+
+
+def test_clean_owned_output_removes_a_previous_run_but_not_build_or_source(tmp_path):
+    (tmp_path / "sections" / "01-s").mkdir(parents=True)
+    (tmp_path / "sections" / "01-s" / "index.html").write_text("stale")
+    (tmp_path / "unlinked-pages").mkdir()
+    (tmp_path / "unlinked-pages" / "old.html").write_text("stale")
+    (tmp_path / "index.html").write_text("stale")
+    (tmp_path / "_build").mkdir()
+    (tmp_path / "_build" / "course.json").write_text("{}")
+    (tmp_path / "_source").mkdir()
+    (tmp_path / "_source" / "keep.txt").write_text("keep")
+
+    render.clean_owned_output(tmp_path)
+
+    assert not (tmp_path / "sections").exists()
+    assert not (tmp_path / "unlinked-pages").exists()
+    assert not (tmp_path / "index.html").exists()
+    assert (tmp_path / "_build" / "course.json").exists()
+    assert (tmp_path / "_source" / "keep.txt").exists()
+
+
+def test_clean_owned_output_is_a_no_op_on_a_directory_that_does_not_exist_yet(tmp_path):
+    render.clean_owned_output(tmp_path / "does-not-exist")  # must not raise
+
+
+def test_resolve_cross_reference_tokens_rewrites_a_resolved_wiki_reference(tmp_path):
+    (tmp_path / "sections" / "01-s" / "pages").mkdir(parents=True)
+    (tmp_path / "sections" / "02-t" / "pages").mkdir(parents=True)
+    source = tmp_path / "sections" / "01-s" / "pages" / "a.html"
+    target = tmp_path / "sections" / "02-t" / "pages" / "b.html"
+    source.write_text('<a href="%24WIKI_REFERENCE%24/pages/b">B</a>')
+    target.write_text("<h1>B</h1>")
+    gaps = []
+
+    fixed = render.resolve_cross_reference_tokens(
+        tmp_path, {"identifierrefs": {}, "wiki_slugs": {"b": target}}, gaps)
+
+    assert fixed == 1
+    assert gaps == []
+    out = source.read_text()
+    assert "WIKI_REFERENCE" not in out
+    assert 'href="../../02-t/pages/b.html"' in out
+
+
+def test_resolve_cross_reference_tokens_strips_an_unresolvable_wiki_reference(tmp_path):
+    (tmp_path / "sections" / "01-s" / "pages").mkdir(parents=True)
+    source = tmp_path / "sections" / "01-s" / "pages" / "a.html"
+    source.write_text('<a href="%24WIKI_REFERENCE%24/pages/ghost">Ghost</a>')
+    gaps = []
+
+    fixed = render.resolve_cross_reference_tokens(
+        tmp_path, {"identifierrefs": {}, "wiki_slugs": {}}, gaps)
+
+    assert fixed == 1
+    out = source.read_text()
+    assert "WIKI_REFERENCE" not in out
+    assert "<a>Ghost</a>" in out
+    assert gaps == [{"page": "sections/01-s/pages/a.html",
+                     "token": "WIKI_REFERENCE", "target": "ghost"}]
+
+
+def test_resolve_cross_reference_tokens_rewrites_an_object_reference(tmp_path):
+    (tmp_path / "sections" / "01-s" / "pages").mkdir(parents=True)
+    (tmp_path / "unlinked-assignments").mkdir(parents=True)
+    source = tmp_path / "sections" / "01-s" / "pages" / "a.html"
+    target = tmp_path / "unlinked-assignments" / "mud-cards.html"
+    source.write_text('<a href="%24CANVAS_OBJECT_REFERENCE%24/assignments/g1">M</a>')
+    target.write_text("<h1>M</h1>")
+    gaps = []
+
+    fixed = render.resolve_cross_reference_tokens(
+        tmp_path, {"identifierrefs": {"g1": target}, "wiki_slugs": {}}, gaps)
+
+    assert fixed == 1
+    assert gaps == []
+    assert 'href="../../../unlinked-assignments/mud-cards.html"' in source.read_text()
+
+
+def test_resolve_cross_reference_tokens_strips_an_unresolvable_object_reference(tmp_path):
+    (tmp_path / "sections" / "01-s" / "pages").mkdir(parents=True)
+    source = tmp_path / "sections" / "01-s" / "pages" / "a.html"
+    source.write_text('<a href="%24CANVAS_OBJECT_REFERENCE%24/quizzes/g-ghost">Q</a>')
+    gaps = []
+
+    fixed = render.resolve_cross_reference_tokens(
+        tmp_path, {"identifierrefs": {}, "wiki_slugs": {}}, gaps)
+
+    assert fixed == 1
+    assert "CANVAS_OBJECT_REFERENCE" not in source.read_text()
+    assert gaps[0]["target"] == "g-ghost"
+
+
+def test_resolve_cross_reference_tokens_points_course_assignments_at_the_index(tmp_path):
+    (tmp_path / "sections" / "01-s" / "pages").mkdir(parents=True)
+    source = tmp_path / "sections" / "01-s" / "pages" / "a.html"
+    source.write_text('<a href="%24CANVAS_COURSE_REFERENCE%24/assignments">A</a> '
+                       '<a href="%24CANVAS_COURSE_REFERENCE%24/assignments/syllabus">S</a>')
+    gaps = []
+
+    fixed = render.resolve_cross_reference_tokens(
+        tmp_path, {"identifierrefs": {}, "wiki_slugs": {}}, gaps)
+
+    assert fixed == 1
+    out = source.read_text()
+    assert out.count('href="../../../index.html"') == 2
+    assert gaps == []
+
+
+def test_resolve_cross_reference_tokens_strips_an_unsupported_course_reference(tmp_path):
+    (tmp_path / "sections" / "01-s" / "pages").mkdir(parents=True)
+    source = tmp_path / "sections" / "01-s" / "pages" / "a.html"
+    source.write_text('<a href="%24CANVAS_COURSE_REFERENCE%24/grades">G</a>')
+    gaps = []
+
+    fixed = render.resolve_cross_reference_tokens(
+        tmp_path, {"identifierrefs": {}, "wiki_slugs": {}}, gaps)
+
+    assert fixed == 1
+    assert "CANVAS_COURSE_REFERENCE" not in source.read_text()
+    assert gaps[0]["target"] == "grades"
+
+
+def test_resolve_cross_reference_tokens_never_touches_source_or_build(tmp_path):
+    (tmp_path / "_source" / "elucidat" / "M1").mkdir(parents=True)
+    stale = tmp_path / "_source" / "elucidat" / "M1" / "01.html"
+    original = '<a href="%24WIKI_REFERENCE%24/pages/ghost">G</a>'
+    stale.write_text(original)
+    (tmp_path / "_build").mkdir(parents=True)
+    build_stale = tmp_path / "_build" / "course.json"
+    build_stale.write_text(original)
+
+    render.resolve_cross_reference_tokens(
+        tmp_path, {"identifierrefs": {}, "wiki_slugs": {}}, [])
+
+    assert stale.read_text() == original
+    assert build_stale.read_text() == original
+
+
+# ------------------------------------------------- full render_site (v2) --
+
+def test_render_site_archives_orphaned_wiki_pages_and_object_references(tmp_path, monkeypatch):
+    # A linked page and an unlinked ("orphan") wiki page, cross-referencing
+    # each other and an orphaned assignment, plus a self-reference that
+    # can't be resolved -- exercising Findings 1 and 2 end to end.
+    cart = tmp_path / "cart"
+    (cart / "wiki_content").mkdir(parents=True)
+    (cart / "wiki_content" / "help.html").write_text(
+        '<html><head><title>Help</title>'
+        '<meta name="identifier" content="g-help"/></head>'
+        '<body><p>See <a href="%24WIKI_REFERENCE%24/pages/landing">Landing</a> and '
+        '<a href="%24WIKI_REFERENCE%24/pages/ghost">Ghost</a>.</p></body></html>')
+    resdir = cart / "g-assign"
+    resdir.mkdir(parents=True)
+    (resdir / "assignment_settings.xml").write_text(
+        '<assignment xmlns="http://canvas.instructure.com/xsd/cccv1p0">'
+        '<title>Orphan Task</title><points_possible>0</points_possible>'
+        '<submission_types>none</submission_types></assignment>')
+    (resdir / "orphan-task.html").write_text("<html><body><p>Do it</p></body></html>")
+    monkeypatch.setattr(render.constants, "CARTRIDGE_DIR", str(cart))
+
+    item = {"title": "Landing", "content_type": "WikiPage", "kind": "page",
+            "slug": "landing", "identifierref": "g-landing",
+            "content": {"html": '<a href="%24CANVAS_OBJECT_REFERENCE%24/assignments/g-assign">'
+                                'Orphan Task</a>'}}
+    course = _course_with_items("01-homepage", [item])
+    course["resources"] = {"g-assign": {
+        "type": "associatedcontent/imscc_xmlv1p1/learning-application-resource",
+        "href": "g-assign/orphan-task.html",
+        "files": ["g-assign/orphan-task.html", "g-assign/assignment_settings.xml"]}}
+    build_dir = _write_build(tmp_path, course)
+    out_dir = tmp_path / "out"
+
+    stats = render.render_site(build_dir, out_dir)
+
+    # The orphan wiki page and the orphan assignment both got archived.
+    help_page = (out_dir / "unlinked-pages" / "help.html").read_text()
+    assert 'href="../sections/01-homepage/pages/landing.html"' in help_page
+    assert "WIKI_REFERENCE" not in help_page
+    assert gaps_mention(stats, "ghost")
+
+    orphan_task = (out_dir / "unlinked-assignments" / "orphan-task.html").read_text()
+    assert "Do it" in orphan_task
+
+    # The linked page's reference to the orphan assignment now resolves.
+    landing_page = (out_dir / "sections" / "01-homepage" / "pages" / "landing.html").read_text()
+    assert 'href="../../../unlinked-assignments/orphan-task.html"' in landing_page
+
+    # Both are listed on the index under "Not part of any module".
+    index_html = (out_dir / "index.html").read_text()
+    assert "unlinked-pages/help.html" in index_html
+    assert "unlinked-assignments/orphan-task.html" in index_html
+
+
+def gaps_mention(stats, needle):
+    return any(needle in str(g) for g in stats["gap_details"])
+
+
+def test_render_site_cleans_a_stale_file_from_a_previous_run(tmp_path):
+    course = _course_with_items("01-homepage", [_assignment_item("Only Item")])
+    build_dir = _write_build(tmp_path, course)
+    out_dir = tmp_path / "out"
+    (out_dir / "unlinked-pages").mkdir(parents=True)
+    (out_dir / "unlinked-pages" / "leftover.html").write_text("stale from a since-fixed bug")
+
+    render.render_site(build_dir, out_dir)
+
+    assert not (out_dir / "unlinked-pages" / "leftover.html").exists()
+
+
+@needs_cartridge
+def test_load_wiki_pages_finds_twenty_three_real_pages_with_no_gaps():
+    pages, gaps = render.load_wiki_pages(REAL_CARTRIDGE)
+    assert len(pages) == 23
+    assert gaps == []
+
+
+@needs_cartridge
+def test_render_site_real_render_has_zero_broken_relative_links(tmp_path, monkeypatch):
+    monkeypatch.setattr(render.constants, "CARTRIDGE_DIR", str(REAL_CARTRIDGE))
+    build_dir = Path(constants.OUTPUT_ROOT) / "_build"
+    if not build_dir.exists():
+        pytest.skip("real _build/ not present")
+    out_dir = tmp_path / "out"
+
+    stats = render.render_site(build_dir, out_dir)
+
+    broken = 0
+    href_re = __import__("re").compile(r'\b(?:href|src)="([^"]*)"')
+    for html_file in out_dir.rglob("*.html"):
+        text = html_file.read_text(encoding="utf-8", errors="replace")
+        for match in href_re.finditer(text):
+            value = match.group(1)
+            if not value or value.startswith(("http://", "https://", "mailto:", "data:", "#")):
+                continue
+            target = value.split("#")[0].split("?")[0]
+            if not target:
+                continue
+            import urllib.parse
+            target = urllib.parse.unquote(target)
+            if not (html_file.parent / target).resolve().exists():
+                broken += 1
+    assert broken == 0
+    # Every unresolved cross-reference token is a recorded gap, not a dead link.
+    assert stats["gaps"] == 12
