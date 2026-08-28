@@ -250,6 +250,24 @@ def test_build_report_headline_flags_leaked_student_work_first(tmp_path):
     assert "sections/x/1682_y_submissions/essay.docx" in report
 
 
+def test_build_report_flags_a_thin_non_elucidat_page_as_not_a_reveal_regression(tmp_path):
+    """check_reveal exists to catch reveal.css failing to expand Elucidat's
+    hidden interactive content. A thin *non*-Elucidat page (a Canvas wiki
+    page that's mostly icon links) is real data the check should still
+    surface, but the report must not let a reader mistake it for that
+    regression -- see the real archive's homepage and FAQ pages, which are
+    exactly this shape.
+    """
+    out_dir, cartridge_dir = _good_build(tmp_path)
+    page = out_dir / "sections" / "01-homepage" / "pages" / "thin.html"
+    page.parent.mkdir(parents=True)
+    page.write_text("<div>" + ("<span class='x'></span>" * 500) + "</div>")
+
+    report = verify.build_report(out_dir)
+    assert "not an Elucidat mirror page" in report
+    assert "not that regression" in report
+
+
 def test_build_report_names_transcription_failed_files_individually(tmp_path):
     out_dir, cartridge_dir = _good_build(tmp_path)
     media = json.loads((out_dir / "_build" / "media.json").read_text())

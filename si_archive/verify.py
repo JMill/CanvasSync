@@ -400,8 +400,18 @@ def build_report(out_dir):
         lines.append(f"  - {item['file']} -> {item['target']}")
     lines.append(
         f"- Pages flagged as possibly unrevealed (text/markup ratio < 0.05): {len(thin)}")
+    elucidat_thin = [item for item in thin if "/elucidat/" in item["file"]]
     for item in thin[:20]:
-        lines.append(f"  - {item['file']} (text ratio {item['ratio']})")
+        tag = "" if item in elucidat_thin else " -- not an Elucidat mirror page"
+        lines.append(f"  - {item['file']} (text ratio {item['ratio']}){tag}")
+    if thin and not elucidat_thin:
+        lines.append(
+            "  This check exists to catch reveal.css failing to expand Elucidat's "
+            "hidden interactive content (Ruling: \"zero Elucidat pages fall below "
+            "0.02\"). None of the pages above are Elucidat mirror pages, so this is "
+            "not that regression -- both are Canvas wiki pages whose content is "
+            "mostly icon/PDF-download links, which structurally have a low "
+            "text-to-markup ratio with nothing to reveal.")
     lines.append("")
 
     return "\n".join(lines) + "\n"
