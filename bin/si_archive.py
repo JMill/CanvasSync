@@ -89,6 +89,19 @@ def run_stage(name, args):
         print(f"    {len(records)} files, {len(mp4)} mp4")
         return
 
+    if name == "media":
+        import json
+
+        from si_archive import media
+        local = json.loads((out / "_build" / "local.json").read_text())
+        records = media.derive_all(local, out / "_build")
+        (out / "_build" / "media.json").write_text(
+            json.dumps(records, indent=2, ensure_ascii=False))
+        ok = [r for r in records if r["status"] == "ok"]
+        sheets = [r for r in records if r.get("contactsheet")]
+        print(f"    {len(ok)}/{len(records)} transcripts, {len(sheets)} contact sheets")
+        return
+
     raise NotImplementedError(f"stage {name!r} not yet implemented")
 
 
