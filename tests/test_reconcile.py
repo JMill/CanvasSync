@@ -57,10 +57,28 @@ def test_match_renditions_skips_failed_downloads():
 
 
 def test_match_renditions_tolerates_integer_truncation_of_vimeo_durations():
-    """yt-dlp reports whole seconds; a 258.41s local file must still match 258."""
-    local = [{"path": "/x/MIT_INN_M1_V2.mp4", "duration": 258.41,
+    """yt-dlp reports whole seconds; a 259.5s local file must still match 258
+    at tolerance=2.0. The 1.5s delta is strictly between the old tolerance
+    (1.0) and the new one (2.0), so this fails if tolerance regresses to 1.0."""
+    local = [{"path": "/x/MIT_INN_M1_V2.mp4", "duration": 259.5,
               "size": 90_000_000, "ext": ".mp4"}]
     vimeo = [{"id": "605462161", "status": "ok", "title": "MIT_INN_M1_V2",
               "duration": 258.0, "path": "/v/605462161 - MIT_INN_M1_V2.mp4",
               "size": 80_000_000}]
     assert len(reconcile.match_renditions(local, vimeo)) == 1
+
+
+def test_match_renditions_does_not_let_two_vimeo_videos_claim_one_local_file():
+    """Two Vimeo records with the same normalized title, both within tolerance
+    of a single local file, must produce one rendition, not two -- the local
+    file can't be canonical for two different renditions at once."""
+    local = [{"path": "/x/clarke.mp4", "duration": 343.0,
+              "size": 16_000_000, "ext": ".mp4"}]
+    vimeo = [
+        {"id": "1", "status": "ok", "title": "clarke",
+         "duration": 343.0, "path": "/v/1 - clarke.mp4"},
+        {"id": "2", "status": "ok", "title": "clarke",
+         "duration": 344.0, "path": "/v/2 - clarke.mp4"},
+    ]
+    matches = reconcile.match_renditions(local, vimeo)
+    assert len(matches) == 1

@@ -45,11 +45,14 @@ def match_renditions(local, vimeo, tolerance=2.0):
     candidates = [r for r in local
                   if r.get("ext") == ".mp4" and r.get("duration")]
     matches = []
+    claimed_paths = set()
     for video in vimeo:
         if video.get("status") != "ok" or not video.get("duration"):
             continue
         vtitle = normalize_title(video.get("title") or "")
         for record in candidates:
+            if record["path"] in claimed_paths:
+                continue
             if abs(record["duration"] - video["duration"]) > tolerance:
                 continue
             if normalize_title(Path(record["path"]).name) != vtitle:
@@ -70,6 +73,7 @@ def match_renditions(local, vimeo, tolerance=2.0):
                 "canonical": canonical,
                 "reason": reason,
             })
+            claimed_paths.add(record["path"])
             break
     return matches
 
