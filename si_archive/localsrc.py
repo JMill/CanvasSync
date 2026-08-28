@@ -76,6 +76,31 @@ def index_screenflow_bundles(root):
             if not is_student_work(p)]
 
 
+def find_student_work(root):
+    """Every student-work bundle directory and standalone dump file under
+    `root`, by Dropbox path only -- for MANIFEST.json's "record that they
+    exist and their Dropbox paths, nothing more" obligation (Finding 2).
+
+    Only `Path.rglob`/`is_dir` are used: filesystem-metadata lookups, never
+    an open() of the file itself, so this never touches student content --
+    matching `is_student_work`'s own two shapes (a `*_submissions` bundle
+    directory, a standalone `*_text.html` dump, including the ones nested
+    inside a bundle) rather than reimplementing them.
+    """
+    root = Path(root)
+    found = []
+    for path in root.rglob("*"):
+        try:
+            if fnmatch.fnmatch(path.name.lower(), constants.STUDENT_WORK_DIR_GLOB.lower()):
+                if path.is_dir():
+                    found.append({"path": str(path), "kind": "submissions_bundle"})
+            elif fnmatch.fnmatch(path.name.lower(), constants.STUDENT_WORK_FILE_GLOB.lower()):
+                found.append({"path": str(path), "kind": "text_dump"})
+        except OSError:
+            continue  # can't stat it -- skip rather than guess
+    return sorted(found, key=lambda r: r["path"])
+
+
 def build_index():
     records = []
     records += index_tree(constants.CAMPUS_DIR, "campus")

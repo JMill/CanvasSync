@@ -441,21 +441,41 @@ def transcribe(mp4_path, out_path):
 
 
 def contact_sheet(mp4_path, out_path, duration):
-    """A 4x4 tile sheet for videos worth skimming. None if too short."""
+    """A 4x4 tile sheet for videos worth skimming. None if too short.
+
+    Guarded exactly like `probe_max_volume`: a missing ffmpeg or a
+    `TimeoutExpired` on a multi-gigabyte webinar must fail open (no contact
+    sheet) rather than raise straight out of the per-video loop in
+    `derive_all`.
+    """
     if not duration or duration < constants.CONTACTSHEET_MIN_SECONDS:
         return None
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     interval = max(duration / 16.0, 1.0)
-    result = subprocess.run(
-        ["ffmpeg", "-y", "-v", "error", "-i", str(mp4_path),
-         "-vf", f"fps=1/{interval:.3f},scale=320:-1,tile=4x4",
-         "-frames:v", "1", str(out_path)],
-        capture_output=True, text=True, timeout=1800)
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-i", str(mp4_path),
+             "-vf", f"fps=1/{interval:.3f},scale=320:-1,tile=4x4",
+             "-frames:v", "1", str(out_path)],
+            capture_output=True, text=True, timeout=1800)
+    except (subprocess.SubprocessError, OSError):
+        return None
     return out_path if result.returncode == 0 and out_path.exists() else None
 
 
 def derive_all(local, out_dir):
+    """One record per video, appended even when that video's own processing
+    blows up. Every other stage-level loop on this branch already records a
+    gap and continues (Ruling: "record a gap and continue"); this was the
+    one exception -- a bad Dropbox online-only placeholder, a permission
+    error, or any other surprise while reading/writing a transcript used to
+    raise straight out of the loop, aborting the multi-hour stage and, since
+    the caller only writes media.json after this function returns, leaving
+    no manifest at all for videos already processed. The whole per-video
+    body is wrapped so one bad asset becomes a `status: "gap"` record
+    instead.
+    """
     out_dir = Path(out_dir)
     srt_index = {r["path"] for r in local if r.get("ext") == ".srt"}
     records = []
@@ -463,19 +483,23 @@ def derive_all(local, out_dir):
     for index, record in enumerate(videos, start=1):
         stem = Path(record["path"]).stem
         transcript = out_dir / "transcripts" / f"{stem}.transcript.md"
-        if needs_transcription(record, srt_index):
-            print(f"    [{index}/{len(videos)}] whisper: {stem}")
-            result = transcribe(record["path"], transcript)
-        else:
-            srt = Path(record["path"]).with_suffix(".srt")
-            transcript.parent.mkdir(parents=True, exist_ok=True)
-            transcript.write_text(
-                srt_to_markdown(srt.read_text(encoding="utf-8", errors="replace")))
-            result = {"path": record["path"], "status": "ok",
-                      "transcript": str(transcript), "source": "srt"}
-        sheet = contact_sheet(record["path"],
-                              out_dir / "contactsheets" / f"{stem}.jpg",
-                              record.get("duration"))
-        result["contactsheet"] = str(sheet) if sheet else None
+        try:
+            if needs_transcription(record, srt_index):
+                print(f"    [{index}/{len(videos)}] whisper: {stem}")
+                result = transcribe(record["path"], transcript)
+            else:
+                srt = Path(record["path"]).with_suffix(".srt")
+                transcript.parent.mkdir(parents=True, exist_ok=True)
+                transcript.write_text(
+                    srt_to_markdown(srt.read_text(encoding="utf-8", errors="replace")))
+                result = {"path": record["path"], "status": "ok",
+                          "transcript": str(transcript), "source": "srt"}
+            sheet = contact_sheet(record["path"],
+                                  out_dir / "contactsheets" / f"{stem}.jpg",
+                                  record.get("duration"))
+            result["contactsheet"] = str(sheet) if sheet else None
+        except Exception as exc:  # one bad asset must not kill the whole stage
+            result = {"path": record["path"], "status": "gap",
+                      "error": str(exc), "contactsheet": None}
         records.append(result)
     return records

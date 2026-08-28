@@ -38,10 +38,11 @@ import json
 import os
 import re
 import shutil
+import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from si_archive import constants, media
+from si_archive import constants, localsrc, media
 from si_archive.cartridge import parse_assignment, parse_discussion, slugify
 from si_archive.cartridge import _read_body as cartridge_read_body
 
@@ -72,6 +73,7 @@ TITLE_TAG_RE = re.compile(r"<title>([^<]*)</title>")
 QTI = "{http://www.imsglobal.org/xsd/ims_qtiasiv1p2}"
 IMSCP_NS = "{http://www.imsglobal.org/xsd/imsccv1p1/imscp_v1p1}"
 TOPIC_META_NS = "{http://canvas.instructure.com/xsd/cccv1p0}"
+DOCX_BODY_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 # Every unlinked-content page lives two levels under out_dir:
 # unlinked/<kind>/<slug>.html. unlinked/index.html itself is one level down.
@@ -155,6 +157,32 @@ def unique_filename(seen, base):
     seen[base] = seen.get(base, 0) + 1
     n = seen[base]
     return base if n == 1 else f"{base}-{n}"
+
+
+def register_wiki_slug(wiki_slug_to_path, slug, path, gaps, context):
+    """Claim `slug` for `path` in the wiki-reference registry
+    `resolve_cross_reference_tokens` resolves $WIKI_REFERENCE$ links
+    against.
+
+    Finding 5 (final review): the prior version used plain `setdefault`, so
+    a slug claimed by two different page-kind items would silently resolve
+    every $WIKI_REFERENCE$ to whichever one happened to register first --
+    wrong content served with no indication anything was ambiguous, worse
+    than a broken link. A second (or later) claimant poisons the slug to
+    None instead: `resolve_cross_reference_tokens` already treats a
+    None/missing target as unresolved, strips the href and records a gap --
+    exactly the outcome an ambiguous slug should get. Does not fire today
+    (all 45 real slugs are unique); this is a correctness fix for if that
+    ever stops being true, not a response to an observed collision.
+    """
+    if slug in wiki_slug_to_path:
+        gaps.append({"reason": "duplicate wiki slug claimed by more than one item -- "
+                               "links to it will be stripped as unresolvable rather "
+                               "than silently resolved to the first claimant",
+                    "slug": slug, "context": context})
+        wiki_slug_to_path[slug] = None
+        return
+    wiki_slug_to_path[slug] = path
 
 
 def _load_json_safe(path, default):
@@ -755,6 +783,213 @@ def render_unlinked_index(categories, out_dir):
     return "\n".join(parts)
 
 
+# ------------------------------------------------------------- documents --
+#
+# Finding 1 (final review): the spec's output tree lists `documents/  3
+# GDrive DOCX + converted readable form`, and Scope decisions include them
+# as course content to be "archived and linked" -- but no code ever built
+# this directory. local.json already carries the 3 .docx under
+# learning_facilitator_for_systematic_innovation_2/; this section copies
+# them in and extracts a plain-text reading copy alongside each, using only
+# the standard library (a .docx is a zip of XML -- zipfile + ElementTree
+# over word/document.xml) rather than adding a new dependency.
+
+def extract_docx_text(path):
+    """Best-effort readable text from a .docx's word/document.xml, stdlib
+    only. Returns None -- never raises -- for a corrupt zip, a missing
+    document.xml, or malformed XML: the caller still copies and links the
+    original .docx in that case, it just has no plain-text sibling.
+    """
+    try:
+        with zipfile.ZipFile(path) as archive:
+            data = archive.read("word/document.xml")
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return None
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        return None
+    paragraphs = []
+    for para in root.iter(f"{DOCX_BODY_NS}p"):
+        paragraphs.append("".join(node.text or "" for node in para.iter(f"{DOCX_BODY_NS}t")))
+    text = "\n\n".join(paragraphs).strip()
+    return text or None
+
+
+def render_documents_index(entries):
+    parts = ["<h1>Documents</h1>",
+            "<p>Assignment specifications from the course's Google Drive folder -- "
+            "course content, archived and linked per the design's scope decisions. "
+            "Each is linked as its original .docx plus a converted plain-text "
+            "reading copy where extraction succeeded.</p>"]
+    items = []
+    for entry in entries:
+        if not entry.get("docx"):
+            items.append(f'<li>{html_mod.escape(entry["title"])} '
+                         f'(could not be copied: {html_mod.escape(entry.get("reason", ""))})</li>')
+            continue
+        links = [f'<a href="{Path(entry["docx"]).name}">'
+                f'{html_mod.escape(entry["title"])} (.docx)</a>']
+        if entry.get("text"):
+            links.append(f'<a href="{Path(entry["text"]).name}">plain text</a>')
+        items.append(f"<li>{' -- '.join(links)}</li>")
+    parts.append(f"<ul>{''.join(items)}</ul>")
+    return "\n".join(parts)
+
+
+def place_documents(local, out_dir):
+    """Copy every .docx local.json carries into documents/, plus a
+    stdlib-extracted plain-text reading copy alongside it, and a
+    documents/index.html linking both. Never raises: a copy or extraction
+    failure for one document is recorded on its own entry (and shows up on
+    the index as "could not be copied") rather than dropping it or aborting
+    the rest.
+
+    Returns a list of {"docx", "text", "title", "source_path"} entries
+    (paths relative to out_dir where the copy succeeded) for MANIFEST.json
+    and the caller's index.html link.
+    """
+    out_dir = Path(out_dir)
+    docx_records = [r for r in local if r.get("ext") == ".docx"]
+    if not docx_records:
+        return []
+    out_subdir = out_dir / "documents"
+    try:
+        out_subdir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return []
+
+    entries = []
+    seen = {}
+    for record in sorted(docx_records, key=lambda r: r.get("relpath") or r["path"]):
+        source = Path(record["path"])
+        title = source.stem
+        name = unique_filename(seen, slugify(title) or "document")
+        docx_dest = out_subdir / f"{name}.docx"
+        try:
+            shutil.copy2(source, docx_dest)
+        except OSError as exc:
+            entries.append({"docx": None, "text": None, "title": title,
+                            "reason": str(exc), "source_path": str(source)})
+            continue
+        text_rel = None
+        try:
+            text = extract_docx_text(source)
+        except Exception:
+            text = None
+        if text:
+            try:
+                (out_subdir / f"{name}.txt").write_text(text, encoding="utf-8")
+                text_rel = str((out_subdir / f"{name}.txt").relative_to(out_dir))
+            except OSError:
+                text_rel = None
+        entries.append({"docx": str(docx_dest.relative_to(out_dir)), "text": text_rel,
+                        "title": title, "source_path": str(source)})
+
+    try:
+        (out_subdir / "index.html").write_text(
+            page_shell("Documents", render_documents_index(entries), depth=1))
+    except OSError:
+        pass
+    return entries
+
+
+# ------------------------------------------------------------- MANIFEST ---
+#
+# Finding 2 (final review): the spec defines MANIFEST.json as "every file:
+# provenance, sha256, aliases, decisions" and depends on it for student-work
+# bundles (Dropbox path only, never content), ScreenFlow bundles (path and
+# size), reference videos (labelled third-party), and -- for every file that
+# survives into the archive -- its originating source, original path or
+# URL, SHA-256, and the reason it was chosen over its aliases. All of that
+# data already exists in ledger.json and local.json; this is a
+# serialization step, not new computation. The caption provenance a prior
+# ruling added (Ruling 22) is kept as one field among the rest, not the
+# whole file.
+
+def _local_path_index(local):
+    return {r["path"]: r for r in local if r.get("path")}
+
+
+def build_manifest(ledger, local, captions, document_entries, campus_dir=None):
+    """Assemble MANIFEST.json's full contract from ledger.json/local.json.
+    Never raises on a single bad entry: a lookup miss just leaves a field
+    None rather than aborting the whole manifest.
+    """
+    campus_dir = campus_dir or constants.CAMPUS_DIR
+    path_index = _local_path_index(local)
+    rendition_by_local = {m["local_path"]: m for m in ledger.get("renditions", [])
+                          if m.get("local_path")}
+
+    files = []
+    for group in ledger.get("files", []):
+        canonical = group.get("canonical")
+        if not canonical:
+            continue
+        record = path_index.get(canonical, {})
+        aliases = group.get("aliases", [])
+        entry = {
+            "canonical_path": canonical,
+            "source": record.get("source"),
+            "sha256": group.get("sha256"),
+            "size": group.get("size"),
+            "aliases": aliases,
+            "reason": ("byte-identical duplicate(s) collapsed to this copy" if aliases
+                      else "sole surviving copy; no byte-identical duplicate found"),
+            "third_party": "/references/" in canonical.replace("\\", "/"),
+        }
+        rendition = rendition_by_local.get(canonical)
+        if rendition:
+            entry["rendition_match"] = {
+                "vimeo_id": rendition.get("vimeo_id"),
+                "vimeo_path": rendition.get("vimeo_path"),
+                "vimeo_duration": rendition.get("vimeo_duration"),
+                "local_duration": rendition.get("local_duration"),
+                "chosen": rendition.get("canonical"),
+                "reason": rendition.get("reason"),
+            }
+        files.append(entry)
+
+    for video in ledger.get("online_only", []):
+        path = video.get("path")
+        if not path:
+            continue
+        try:
+            sha = localsrc.sha256(path)
+        except OSError:
+            sha = None
+        files.append({
+            "canonical_path": path,
+            "source": "vimeo",
+            "original_url": f"https://player.vimeo.com/video/{video.get('id')}",
+            "sha256": sha,
+            "size": video.get("size"),
+            "aliases": [],
+            "reason": "Vimeo-only asset; no local counterpart found",
+            "third_party": True,
+        })
+    files.sort(key=lambda e: e["canonical_path"])
+
+    screenflow = sorted(
+        ({"path": r["path"], "size": r.get("size")} for r in local if r.get("ext") == ".screenflow"),
+        key=lambda e: e["path"])
+
+    documents = [{"docx": e.get("docx"), "text": e.get("text"), "title": e.get("title")}
+                for e in document_entries if e.get("docx")]
+
+    return {
+        "files": files,
+        "student_work": localsrc.find_student_work(campus_dir),
+        "screenflow_bundles": screenflow,
+        "reference_note": ('Entries above with "third_party": true are material that '
+                           "does not originate with this course: reference videos under "
+                           "a Module's references/ folder, and Vimeo ids with no local "
+                           "counterpart."),
+        "captions": captions,
+        "documents": documents,
+    }
+
+
 # ------------------------------------------------------- media placement --
 
 def section_dir_for(course, section_title):
@@ -937,7 +1172,8 @@ def place_media(course, ledger, media_records, out_dir, build_dir=None):
 # orphans its old filename) without ever touching _build/ or _source/, the
 # read-only stage inputs that also happen to live under out_dir.
 
-CURRENT_OWNED_TOP_LEVEL = ("sections", "orientation", "closing", "files", "unlinked")
+CURRENT_OWNED_TOP_LEVEL = ("sections", "orientation", "closing", "files", "unlinked",
+                          "documents")
 
 # Top-level names a *previous* version of this module owned and wrote to,
 # kept here even though nothing in render_site writes to them any more. A
@@ -1073,6 +1309,41 @@ def resolve_cross_reference_tokens(out_dir, registries, gaps):
     return fixed
 
 
+# --------------------------------------------------------- _source copy --
+#
+# Minor finding (final review): the spec's output tree lists `_source/cartridge/`
+# (the unmodified export) and `_source/provenance/` (the originating email
+# PDF) alongside `_source/elucidat/` -- only the latter was ever built, so
+# the delivered archive depended on Dropbox and ~/Downloads for its own
+# canonical export and provenance record. Both are cheap (~15 MB, ~60 KB)
+# and read-only sources, so this copies them in rather than recording a
+# deviation. Never raises: a copy failure is a gap, not an aborted render.
+
+def archive_source_copies(out_dir, gaps, cartridge_dir=None, provenance_pdf=None):
+    out_dir = Path(out_dir)
+    cartridge_dir = Path(cartridge_dir or constants.CARTRIDGE_DIR)
+    provenance_pdf = Path(provenance_pdf or constants.PROVENANCE_PDF)
+
+    if cartridge_dir.exists():
+        try:
+            shutil.copytree(cartridge_dir, out_dir / "_source" / "cartridge",
+                            dirs_exist_ok=True)
+        except OSError as exc:
+            gaps.append({"reason": f"_source/cartridge copy failed: {exc}"})
+    else:
+        gaps.append({"reason": f"cartridge export not found at {cartridge_dir}"})
+
+    if provenance_pdf.exists():
+        try:
+            dest = out_dir / "_source" / "provenance"
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(provenance_pdf, dest / provenance_pdf.name)
+        except OSError as exc:
+            gaps.append({"reason": f"_source/provenance copy failed: {exc}"})
+    else:
+        gaps.append({"reason": f"provenance PDF not found at {provenance_pdf}"})
+
+
 # ------------------------------------------------------------ site build --
 
 def render_site(build_dir, out_dir):
@@ -1156,7 +1427,8 @@ def render_site(build_dir, out_dir):
             if ref:
                 id_to_path[ref] = written_path
             if kind == "page" and item.get("slug"):
-                wiki_slug_to_path.setdefault(item["slug"], written_path)
+                register_wiki_slug(wiki_slug_to_path, item["slug"], written_path, gaps,
+                                   context=str(written_path.relative_to(out_dir)))
 
         index_body = render_section_index(section, item_links)
         try:
@@ -1176,24 +1448,47 @@ def render_site(build_dir, out_dir):
         except OSError as exc:
             gaps.append({"reason": f"web_resources copy failed: {exc}"})
 
+    # _source/cartridge and _source/provenance -- the raw export and its own
+    # provenance PDF, alongside _source/elucidat. Cheap, read-only sources.
+    archive_source_copies(out_dir, gaps)
+
     # Campus media -- only once Tasks 6/7 have produced a ledger and media.json.
     placed = 0
+    captions = []
     ledger = _load_json_safe(build_dir / "ledger.json", default=None)
     media_records = _load_json_safe(build_dir / "media.json", default=None)
+    local = _load_json_safe(build_dir / "local.json", default=None)
     if isinstance(ledger, dict) and isinstance(media_records, list):
         try:
             placed, captions = place_media(course, ledger, media_records, out_dir, build_dir)
         except Exception as exc:  # a structurally malformed ledger/media.json -- not a crash
-            captions = []
             gaps.append({"reason": f"media placement failed: {exc}"})
-        if captions:
-            try:
-                (out_dir / "MANIFEST.json").write_text(
-                    json.dumps(captions, indent=2, ensure_ascii=False))
-            except OSError as exc:
-                gaps.append({"reason": f"MANIFEST.json write failed: {exc}"})
     elif ledger is not None or media_records is not None:
         gaps.append({"reason": "ledger.json/media.json present but not in the expected shape"})
+
+    # documents/ (Finding 1) -- only needs local.json, independent of
+    # ledger/media, so it's built even on a run with no ledger yet.
+    document_entries = []
+    if isinstance(local, list):
+        try:
+            document_entries = place_documents(local, out_dir)
+        except Exception as exc:
+            gaps.append({"reason": f"documents placement failed: {exc}"})
+    elif local is not None:
+        gaps.append({"reason": "local.json present but not a list"})
+    written += len([e for e in document_entries if e.get("docx")])
+
+    # MANIFEST.json (Finding 2) -- the full provenance contract, built from
+    # ledger.json/local.json once a ledger exists; captions/documents are
+    # folded in as fields of it rather than being the whole file.
+    if isinstance(ledger, dict):
+        try:
+            manifest = build_manifest(ledger, local if isinstance(local, list) else [],
+                                      captions, document_entries)
+            (out_dir / "MANIFEST.json").write_text(
+                json.dumps(manifest, indent=2, ensure_ascii=False, default=str))
+        except Exception as exc:
+            gaps.append({"reason": f"MANIFEST.json write failed: {exc}"})
 
     # Every kind of content reachable from no module item: the orphaned QTI
     # assessment, wiki pages, the announcement/discussion stream, and
@@ -1226,7 +1521,8 @@ def render_site(build_dir, out_dir):
         id_to_path[entry["ident"]] = entry["path"]
     for entry in wiki_entries:
         id_to_path[entry["ident"]] = entry["path"]
-        wiki_slug_to_path.setdefault(entry["slug"], entry["path"])
+        register_wiki_slug(wiki_slug_to_path, entry["slug"], entry["path"], gaps,
+                           context=str(entry["path"].relative_to(out_dir)))
     for entry in discussion_entries:
         id_to_path[entry["ident"]] = entry["path"]
     for entry in assignment_entries:
@@ -1284,6 +1580,12 @@ def render_site(build_dir, out_dir):
             f'<p><a href="question-banks.html">Question banks</a> '
             f'({len(banks)} source pools quizzes draw from -- not shown to '
             f'learners as such)</p>')
+    placed_documents = [e for e in document_entries if e.get("docx")]
+    if placed_documents:
+        index_parts.append(
+            f'<p><a href="documents/index.html">Documents</a> '
+            f'({len(placed_documents)} GDrive assignment specification'
+            f'{"s" if len(placed_documents) != 1 else ""})</p>')
     try:
         (out_dir / "index.html").write_text(
             page_shell(course.get("title", ""), "\n".join(index_parts), depth=0))
@@ -1298,5 +1600,5 @@ def render_site(build_dir, out_dir):
     links_fixed = resolve_cross_reference_tokens(out_dir, registries, gaps)
 
     return {"pages_written": written, "sections": len(course["sections"]),
-            "media_placed": placed, "gaps": len(gaps), "gap_details": gaps,
-            "links_fixed": links_fixed}
+            "media_placed": placed, "documents": len(placed_documents),
+            "gaps": len(gaps), "gap_details": gaps, "links_fixed": links_fixed}

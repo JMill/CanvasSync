@@ -357,6 +357,46 @@ def check_coverage(out_dir, cartridge_dir=None):
     _row(rows, "Assessments on disk", 6, lambda: (len(assessments), len(assessments) == 6))
     _row(rows, "Question banks on disk", 11, lambda: (len(banks), len(banks) == 11))
 
+    # ---- Deliverable tree (final review, minor): the checks above all read
+    # _build/*.json -- none of them ever looked at the delivered output tree
+    # itself, which is exactly why 24/24 could pass while documents/,
+    # MANIFEST.json's real contract and _source/{cartridge,provenance} were
+    # silently missing from the archive. These three check the tree.
+    def _documents_on_disk():
+        docs_dir = out_dir / "documents"
+        count = len(list(docs_dir.glob("*.docx"))) if docs_dir.is_dir() else 0
+        return (count, count == 3)
+    _row(rows, "documents/ (.docx) on disk", 3, _documents_on_disk)
+
+    def _manifest_shape():
+        manifest = _safe_json(out_dir / "MANIFEST.json")
+        if not isinstance(manifest, dict):
+            return ("MANIFEST.json missing or not a JSON object", False)
+        expected_keys = {"files", "student_work", "screenflow_bundles", "captions", "documents"}
+        missing = sorted(expected_keys - set(manifest))
+        if missing:
+            return (f"missing top-level keys: {missing}", False)
+        files = manifest.get("files") or []
+        provenance_fields = {"canonical_path", "source", "sha256", "aliases", "reason"}
+        has_provenance = bool(files) and all(provenance_fields <= set(entry) for entry in files)
+        student_work = manifest.get("student_work") or []
+        student_work_path_only = all(set(entry) <= {"path", "kind"} for entry in student_work)
+        ok = has_provenance and student_work_path_only
+        return (f"{len(files)} file entries with provenance fields: {has_provenance}; "
+                f"{len(student_work)} student_work entries, path-only: "
+                f"{student_work_path_only}", ok)
+    _row(rows, "MANIFEST.json matches spec contract",
+        "every file entry carries provenance; student_work entries are path-only",
+        _manifest_shape)
+
+    def _source_copies():
+        base = out_dir / "_source"
+        present = {name: (base / name).is_dir() and any((base / name).iterdir())
+                  for name in ("cartridge", "elucidat", "provenance")}
+        return (present, all(present.values()))
+    _row(rows, "_source/{cartridge,elucidat,provenance} all present and non-empty",
+        True, _source_copies)
+
     return rows
 
 

@@ -13,6 +13,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 STAGES = ["cartridge", "elucidat", "vimeo", "local",
           "reconcile", "media", "render", "verify"]
 
+# elucidat and vimeo are the two stages that depend on a third-party server
+# having a good day. A bad day doesn't fail loudly -- it returns a
+# structurally valid, gap-heavy result (elucidat.mirror_project appends a
+# `_project_gap` with `pages: []` per failed project rather than raising),
+# and `run_stage` overwrites that stage's _build/*.json unconditionally. For
+# elucidat specifically that then propagates: render.py's clean_owned_output
+# deletes sections/ and rebuilds it from whatever elucidat.json says, so one
+# bad network day for `si_archive all` can silently gut the delivered site
+# down to its gaps. Every other stage is either purely local (cartridge,
+# local, reconcile, render, verify) or, for media, already cheap to re-run
+# via its own on-disk resume logic (find_existing_srt) rather than blind
+# overwrite. So `all` skips re-fetching a network stage that already has
+# output, unless --force says otherwise; running a stage by name directly
+# (`si_archive elucidat`) is a deliberate, explicit re-fetch and always runs.
+NETWORK_STAGE_OUTPUT = {"elucidat": "elucidat.json", "vimeo": "vimeo.json"}
+
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
@@ -24,10 +40,22 @@ def main(argv=None):
     ap.add_argument("--min-gap", type=float, default=1.5)
     ap.add_argument("--jitter", type=float, default=1.5)
     ap.add_argument("--rest-every", type=int, default=25)
+    ap.add_argument("--force", action="store_true",
+                    help="with the 'all' driver, re-run the elucidat/vimeo network "
+                         "stages even if their _build/*.json output already exists")
     args = ap.parse_args(argv)
+
+    from si_archive import constants
+    out = Path(args.out or constants.OUTPUT_ROOT)
 
     stages = STAGES if args.stage == "all" else [args.stage]
     for name in stages:
+        output_name = NETWORK_STAGE_OUTPUT.get(name)
+        if (args.stage == "all" and not args.force and output_name
+                and (out / "_build" / output_name).exists()):
+            print(f"==> {name} (skipped: _build/{output_name} already exists -- "
+                  "pass --force to re-fetch)")
+            continue
         print(f"==> {name}")
         run_stage(name, args)
     return 0
@@ -119,8 +147,8 @@ def run_stage(name, args):
         from si_archive import render
         stats = render.render_site(out / "_build", out)
         print(f"    {stats['pages_written']} pages, {stats['sections']} sections, "
-              f"{stats['media_placed']} media files, {stats['gaps']} gaps, "
-              f"{stats['links_fixed']} cross-reference links resolved")
+              f"{stats['media_placed']} media files, {stats['documents']} documents, "
+              f"{stats['gaps']} gaps, {stats['links_fixed']} cross-reference links resolved")
         return
 
     if name == "verify":

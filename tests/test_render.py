@@ -1218,7 +1218,14 @@ def test_render_site_real_render_has_zero_broken_relative_links(tmp_path, monkey
 
     broken = 0
     href_re = __import__("re").compile(r'\b(?:href|src)="([^"]*)"')
+    # _source/ and _build/ are archived raw material, not the delivered
+    # site -- their HTML (the unmodified cartridge export under
+    # _source/cartridge/, in particular) uses Canvas's own unresolved
+    # $TOKEN$-style hrefs and was never meant to resolve as flat relative
+    # links. Scoped the same way verify.find_broken_links scopes itself.
     for html_file in out_dir.rglob("*.html"):
+        if html_file.relative_to(out_dir).parts[0] in ("_source", "_build"):
+            continue
         text = html_file.read_text(encoding="utf-8", errors="replace")
         for match in href_re.finditer(text):
             value = match.group(1)
@@ -1234,3 +1241,268 @@ def test_render_site_real_render_has_zero_broken_relative_links(tmp_path, monkey
     assert broken == 0
     # Every unresolved cross-reference token is a recorded gap, not a dead link.
     assert stats["gaps"] == 12
+
+
+# ------------------------------------------------- Finding 5: wiki slugs --
+
+def test_register_wiki_slug_claims_a_fresh_slug():
+    registry, gaps = {}, []
+    render.register_wiki_slug(registry, "intro", Path("/out/a.html"), gaps, context="a")
+    assert registry == {"intro": Path("/out/a.html")}
+    assert gaps == []
+
+
+def test_register_wiki_slug_poisons_a_second_claimant_and_records_a_gap():
+    """Finding 5: a slug claimed by two different page-kind items must not
+    silently resolve $WIKI_REFERENCE$ to whichever registered first -- the
+    second claimant poisons the slug to None so the cross-reference
+    resolver treats it as unresolved (strips the link, logs a gap) instead
+    of serving the wrong page's content.
+    """
+    registry, gaps = {}, []
+    render.register_wiki_slug(registry, "intro", Path("/out/a.html"), gaps, context="a")
+    render.register_wiki_slug(registry, "intro", Path("/out/b.html"), gaps, context="b")
+
+    assert registry["intro"] is None
+    assert len(gaps) == 1
+    assert gaps[0]["slug"] == "intro"
+    assert gaps[0]["context"] == "b"
+
+
+def test_register_wiki_slug_a_third_claimant_records_another_gap_not_a_crash():
+    registry, gaps = {}, []
+    render.register_wiki_slug(registry, "intro", Path("/out/a.html"), gaps, context="a")
+    render.register_wiki_slug(registry, "intro", Path("/out/b.html"), gaps, context="b")
+    render.register_wiki_slug(registry, "intro", Path("/out/c.html"), gaps, context="c")
+
+    assert registry["intro"] is None
+    assert len(gaps) == 2
+
+
+def test_resolve_cross_reference_tokens_strips_a_link_to_a_poisoned_slug(tmp_path):
+    (tmp_path / "sections" / "01-s" / "pages").mkdir(parents=True)
+    page = tmp_path / "sections" / "01-s" / "pages" / "a.html"
+    page.write_text('<a href="%24WIKI_REFERENCE%24/pages/intro">Intro</a>')
+    gaps = []
+
+    fixed = render.resolve_cross_reference_tokens(
+        tmp_path, {"identifierrefs": {}, "wiki_slugs": {"intro": None}}, gaps)
+
+    assert fixed == 1
+    assert "WIKI_REFERENCE" not in page.read_text()
+    assert any(g.get("token") == "WIKI_REFERENCE" for g in gaps)
+
+
+# ------------------------------------------------ Finding 1: documents/ ---
+
+DOCX_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+
+def _make_docx(path, paragraphs):
+    import zipfile
+    paras_xml = "".join(f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>" for text in paragraphs)
+    document_xml = (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                    f'<w:document xmlns:w="{DOCX_NS}"><w:body>{paras_xml}'
+                    f"</w:body></w:document>")
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("word/document.xml", document_xml)
+    return path
+
+
+def test_extract_docx_text_reads_paragraphs_from_document_xml(tmp_path):
+    docx = _make_docx(tmp_path / "spec.docx", ["Program Outline", "Course Title: X"])
+    text = render.extract_docx_text(docx)
+    assert "Program Outline" in text
+    assert "Course Title: X" in text
+
+
+def test_extract_docx_text_returns_none_for_a_corrupt_file(tmp_path):
+    bad = tmp_path / "bad.docx"
+    bad.write_text("not a zip at all")
+    assert render.extract_docx_text(bad) is None
+
+
+def test_extract_docx_text_returns_none_when_document_xml_is_missing(tmp_path):
+    import zipfile
+    empty = tmp_path / "empty.docx"
+    with zipfile.ZipFile(empty, "w") as archive:
+        archive.writestr("word/other.xml", "<x/>")
+    assert render.extract_docx_text(empty) is None
+
+
+def test_place_documents_copies_docx_and_writes_a_text_sibling(tmp_path):
+    source = tmp_path / "gdrive" / "Program Outline.docx"
+    _make_docx(source, ["Hello from the outline."])
+    local = [{"path": str(source), "relpath": "Program Outline.docx", "ext": ".docx"}]
+    out_dir = tmp_path / "out"
+
+    entries = render.place_documents(local, out_dir)
+
+    assert len(entries) == 1
+    entry = entries[0]
+    assert (out_dir / entry["docx"]).exists()
+    assert (out_dir / entry["docx"]).suffix == ".docx"
+    assert entry["text"] is not None
+    assert "Hello from the outline." in (out_dir / entry["text"]).read_text()
+    index = (out_dir / "documents" / "index.html").read_text()
+    assert "Program Outline" in index
+    assert ".docx" in index
+
+
+def test_place_documents_still_links_the_docx_when_extraction_fails(tmp_path):
+    source = tmp_path / "gdrive" / "Corrupt.docx"
+    source.parent.mkdir(parents=True)
+    source.write_text("not a real docx")
+    local = [{"path": str(source), "relpath": "Corrupt.docx", "ext": ".docx"}]
+    out_dir = tmp_path / "out"
+
+    entries = render.place_documents(local, out_dir)
+
+    assert len(entries) == 1
+    assert entries[0]["text"] is None
+    assert (out_dir / entries[0]["docx"]).exists()
+
+
+def test_place_documents_returns_empty_when_local_has_no_docx(tmp_path):
+    local = [{"path": "/x/a.pdf", "ext": ".pdf"}]
+    assert render.place_documents(local, tmp_path / "out") == []
+    assert not (tmp_path / "out" / "documents").exists()
+
+
+def test_place_documents_deduplicates_a_title_collision(tmp_path):
+    a = _make_docx(tmp_path / "a" / "Program Outline.docx", ["A"])
+    b = _make_docx(tmp_path / "b" / "Program Outline.docx", ["B"])
+    local = [{"path": str(a), "relpath": "a/Program Outline.docx", "ext": ".docx"},
+             {"path": str(b), "relpath": "b/Program Outline.docx", "ext": ".docx"}]
+    entries = render.place_documents(local, tmp_path / "out")
+    names = sorted(Path(e["docx"]).name for e in entries)
+    assert names == ["program-outline-2.docx", "program-outline.docx"]
+
+
+# ------------------------------------------- Finding 2: MANIFEST.json -----
+
+def test_build_manifest_has_every_top_level_section():
+    ledger = {"files": [], "renditions": [], "online_only": []}
+    manifest = render.build_manifest(ledger, [], captions=[], document_entries=[],
+                                     campus_dir="/nonexistent")
+    assert set(manifest) == {"files", "student_work", "screenflow_bundles",
+                             "reference_note", "captions", "documents"}
+
+
+def test_build_manifest_file_entry_carries_full_provenance():
+    ledger = {"files": [{"canonical": "/x/a.mp4", "aliases": ["/x/a-copy.mp4"],
+                        "sha256": "deadbeef", "size": 100}],
+              "renditions": [], "online_only": []}
+    local = [{"path": "/x/a.mp4", "source": "campus"}]
+
+    manifest = render.build_manifest(ledger, local, captions=[], document_entries=[],
+                                     campus_dir="/nonexistent")
+
+    entry = manifest["files"][0]
+    assert entry["canonical_path"] == "/x/a.mp4"
+    assert entry["source"] == "campus"
+    assert entry["sha256"] == "deadbeef"
+    assert entry["size"] == 100
+    assert entry["aliases"] == ["/x/a-copy.mp4"]
+    assert "duplicate" in entry["reason"]
+    assert entry["third_party"] is False
+
+
+def test_build_manifest_tags_a_references_folder_video_as_third_party():
+    ledger = {"files": [{"canonical": "/x/Module 1/references/Clip.mp4", "aliases": [],
+                        "sha256": "abc", "size": 1}],
+              "renditions": [], "online_only": []}
+    manifest = render.build_manifest(ledger, [], captions=[], document_entries=[],
+                                     campus_dir="/nonexistent")
+    assert manifest["files"][0]["third_party"] is True
+
+
+def test_build_manifest_records_a_rendition_match_reason():
+    ledger = {"files": [{"canonical": "/x/a.mp4", "aliases": [], "sha256": "abc", "size": 1}],
+              "renditions": [{"local_path": "/x/a.mp4", "canonical": "/vimeo/1 - a.mp4",
+                             "vimeo_id": "1", "vimeo_path": "/vimeo/1 - a.mp4",
+                             "vimeo_duration": 10.0, "local_duration": 10.0,
+                             "reason": "vimeo copy is larger"}],
+              "online_only": []}
+    manifest = render.build_manifest(ledger, [], captions=[], document_entries=[],
+                                     campus_dir="/nonexistent")
+    match = manifest["files"][0]["rendition_match"]
+    assert match["chosen"] == "/vimeo/1 - a.mp4"
+    assert match["reason"] == "vimeo copy is larger"
+
+
+def test_build_manifest_includes_an_online_only_vimeo_asset(tmp_path):
+    video = tmp_path / "1 - solo.mp4"
+    video.write_bytes(b"fake video bytes")
+    ledger = {"files": [], "renditions": [],
+              "online_only": [{"id": "1", "path": str(video), "size": 17}]}
+
+    manifest = render.build_manifest(ledger, [], captions=[], document_entries=[],
+                                     campus_dir="/nonexistent")
+
+    entry = manifest["files"][0]
+    assert entry["source"] == "vimeo"
+    assert entry["original_url"] == "https://player.vimeo.com/video/1"
+    assert entry["sha256"] is not None
+    assert entry["third_party"] is True
+
+
+def test_build_manifest_screenflow_bundles_are_path_and_size_only():
+    local = [{"path": "/x/a.screenflow", "ext": ".screenflow", "size": 12345}]
+    ledger = {"files": [], "renditions": [], "online_only": []}
+    manifest = render.build_manifest(ledger, local, captions=[], document_entries=[],
+                                     campus_dir="/nonexistent")
+    assert manifest["screenflow_bundles"] == [{"path": "/x/a.screenflow", "size": 12345}]
+
+
+def test_build_manifest_student_work_is_path_and_kind_only(tmp_path):
+    bundle = tmp_path / "1682_x_submissions"
+    bundle.mkdir()
+    (bundle / "student_essay_text.html").write_text("SECRET STUDENT CONTENT")
+
+    ledger = {"files": [], "renditions": [], "online_only": []}
+    manifest = render.build_manifest(ledger, [], captions=[], document_entries=[],
+                                     campus_dir=tmp_path)
+
+    assert manifest["student_work"]
+    for entry in manifest["student_work"]:
+        assert set(entry) == {"path", "kind"}
+        assert "SECRET" not in json.dumps(entry)
+
+
+def test_build_manifest_keeps_captions_as_one_field_among_the_rest():
+    ledger = {"files": [], "renditions": [], "online_only": []}
+    captions = [{"video": "orientation/media/Talk.mp4", "caption_source": "whisper"}]
+    manifest = render.build_manifest(ledger, [], captions=captions, document_entries=[],
+                                     campus_dir="/nonexistent")
+    assert manifest["captions"] == captions
+    assert manifest["files"] == []  # captions must not have become the whole file
+
+
+# ------------------------------------------------- _source/ copy-in ------
+
+def test_archive_source_copies_copies_cartridge_and_provenance(tmp_path):
+    cartridge = tmp_path / "cartridge"
+    (cartridge / "web_resources").mkdir(parents=True)
+    (cartridge / "imsmanifest.xml").write_text("<manifest/>")
+    pdf = tmp_path / "provenance.pdf"
+    pdf.write_bytes(b"%PDF-fake")
+    out_dir = tmp_path / "out"
+    gaps = []
+
+    render.archive_source_copies(out_dir, gaps, cartridge_dir=cartridge, provenance_pdf=pdf)
+
+    assert (out_dir / "_source" / "cartridge" / "imsmanifest.xml").exists()
+    assert (out_dir / "_source" / "provenance" / "provenance.pdf").exists()
+    assert gaps == []
+
+
+def test_archive_source_copies_records_a_gap_for_a_missing_source(tmp_path):
+    out_dir = tmp_path / "out"
+    gaps = []
+    render.archive_source_copies(out_dir, gaps,
+                                 cartridge_dir=tmp_path / "no-such-cartridge",
+                                 provenance_pdf=tmp_path / "no-such.pdf")
+    assert len(gaps) == 2
+    assert not (out_dir / "_source" / "cartridge").exists()

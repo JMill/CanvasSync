@@ -1,4 +1,5 @@
 from collections import Counter
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from si_archive import media
@@ -565,3 +566,73 @@ def test_is_degenerate_transcript_still_accepts_realistic_prose():
     new rule in place."""
     text = media.srt_to_markdown(_srt_from_sentences(REALISTIC_TRANSCRIPT))
     assert not media.is_degenerate_transcript(text)
+
+
+# --- Finding 3 (final review): "record a gap and continue" in media.py -----
+
+
+def test_contact_sheet_returns_none_on_a_subprocess_error_instead_of_raising(tmp_path):
+    """Guarded exactly like probe_max_volume: a missing ffmpeg binary or a
+    TimeoutExpired on a huge webinar must fail open, not raise out of
+    derive_all's per-video loop."""
+    mp4 = tmp_path / "webinar.mp4"
+    out = tmp_path / "webinar.contactsheet.jpg"
+
+    with patch.object(media.subprocess, "run", side_effect=FileNotFoundError("no ffmpeg")):
+        result = media.contact_sheet(str(mp4), out, duration=600)
+
+    assert result is None
+
+
+def test_contact_sheet_returns_none_on_ffmpeg_timeout(tmp_path):
+    mp4 = tmp_path / "webinar.mp4"
+    out = tmp_path / "webinar.contactsheet.jpg"
+    timeout = media.subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=1800)
+
+    with patch.object(media.subprocess, "run", side_effect=timeout):
+        result = media.contact_sheet(str(mp4), out, duration=600)
+
+    assert result is None
+
+
+def test_derive_all_records_a_gap_for_one_bad_video_and_keeps_processing_the_rest(tmp_path):
+    """derive_all used to have no per-video try at all -- the one
+    stage-level loop on this branch with no gap-record path. A video whose
+    processing raises (here: an unreadable sibling .srt) must become a
+    `status: "gap"` record, and the loop must still process every other
+    video rather than aborting the whole stage.
+    """
+    good = tmp_path / "good.mp4"
+    good.write_text("x")
+    good_srt = tmp_path / "good.srt"
+    good_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nHello\n")
+
+    bad = tmp_path / "bad.mp4"
+    bad.write_text("x")
+    bad_srt = tmp_path / "bad.srt"
+    bad_srt.write_text("placeholder")
+
+    local = [
+        {"path": str(good), "ext": ".mp4", "duration": 1.0},
+        {"path": str(bad), "ext": ".mp4", "duration": 1.0},
+        {"path": str(good_srt), "ext": ".srt"},
+        {"path": str(bad_srt), "ext": ".srt"},
+    ]
+
+    real_read_text = Path.read_text
+
+    def flaky_read_text(self, *args, **kwargs):
+        if self == bad_srt:
+            raise OSError("simulated Dropbox online-only placeholder")
+        return real_read_text(self, *args, **kwargs)
+
+    with patch.object(Path, "read_text", flaky_read_text):
+        records = media.derive_all(local, tmp_path / "_build")
+
+    by_path = {r["path"]: r for r in records}
+    assert len(records) == 2
+    assert by_path[str(good)]["status"] == "ok"
+    assert (tmp_path / "_build" / "transcripts" / "good.transcript.md").exists()
+    assert by_path[str(bad)]["status"] == "gap"
+    assert "simulated Dropbox" in by_path[str(bad)]["error"]
+    assert by_path[str(bad)]["contactsheet"] is None

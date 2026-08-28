@@ -211,6 +211,32 @@ def _good_build(tmp_path):
     for i in range(11):
         _write_bank(assessments_dir, f"bank-{i}")
 
+    # documents/, MANIFEST.json and _source/{cartridge,elucidat,provenance}
+    # are now real, checked deliverables (Findings 1 and 2) -- a "known
+    # good" build needs them on disk too, the same way it already has real
+    # Elucidat pages and transcript files above.
+    documents_dir = out_dir / "documents"
+    documents_dir.mkdir(parents=True)
+    for i in range(3):
+        (documents_dir / f"doc-{i}.docx").write_text("docx placeholder")
+
+    manifest = {
+        "files": [{"canonical_path": f"v{i}.mp4", "source": "campus", "sha256": "x",
+                  "size": 1, "aliases": [], "reason": "sole surviving copy"}
+                 for i in range(3)],
+        "student_work": [{"path": "some/1682_x_submissions", "kind": "submissions_bundle"}],
+        "screenflow_bundles": [{"path": "some/x.screenflow", "size": 1}],
+        "captions": [],
+        "documents": [{"docx": f"documents/doc-{i}.docx", "text": None, "title": f"Doc {i}"}
+                     for i in range(3)],
+    }
+    (out_dir / "MANIFEST.json").write_text(json.dumps(manifest))
+
+    for name in ("cartridge", "elucidat", "provenance"):
+        source_dir = out_dir / "_source" / name
+        source_dir.mkdir(parents=True)
+        (source_dir / "placeholder.txt").write_text("x")
+
     return out_dir, cartridge_dir
 
 
@@ -308,6 +334,59 @@ def test_check_coverage_flags_leaked_student_work(tmp_path):
               if row["check"] == "Student-work paths anywhere in the archive")
     assert row["ok"] is False
     assert row["actual"] == 1
+
+
+def test_check_coverage_flags_missing_documents(tmp_path):
+    """Minor finding (final review): 24/24 could pass while documents/ was
+    entirely missing because no check ever looked at the deliverable tree.
+    """
+    out_dir, cartridge_dir = _good_build(tmp_path)
+    for docx in (out_dir / "documents").glob("*.docx"):
+        docx.unlink()
+
+    rows = verify.check_coverage(out_dir, cartridge_dir=cartridge_dir)
+    row = next(row for row in rows if row["check"] == "documents/ (.docx) on disk")
+    assert row["ok"] is False
+    assert row["actual"] == 0
+
+
+def test_check_coverage_flags_a_manifest_that_is_only_captions(tmp_path):
+    """Regression for the exact defect Finding 2 fixed: a MANIFEST.json
+    that is just the caption list, not the spec's full provenance contract.
+    """
+    out_dir, cartridge_dir = _good_build(tmp_path)
+    (out_dir / "MANIFEST.json").write_text(json.dumps(
+        [{"video": "a.mp4", "caption_source": "whisper"}]))
+
+    rows = verify.check_coverage(out_dir, cartridge_dir=cartridge_dir)
+    row = next(row for row in rows if row["check"] == "MANIFEST.json matches spec contract")
+    assert row["ok"] is False
+
+
+def test_check_coverage_flags_manifest_student_work_carrying_extra_fields(tmp_path):
+    """The contract is path-only for student work -- a stray "content" or
+    "html" field would mean student text leaked into the manifest itself.
+    """
+    out_dir, cartridge_dir = _good_build(tmp_path)
+    manifest = json.loads((out_dir / "MANIFEST.json").read_text())
+    manifest["student_work"][0]["excerpt"] = "leaked student text"
+    (out_dir / "MANIFEST.json").write_text(json.dumps(manifest))
+
+    rows = verify.check_coverage(out_dir, cartridge_dir=cartridge_dir)
+    row = next(row for row in rows if row["check"] == "MANIFEST.json matches spec contract")
+    assert row["ok"] is False
+
+
+def test_check_coverage_flags_missing_source_copies(tmp_path):
+    out_dir, cartridge_dir = _good_build(tmp_path)
+    import shutil as _shutil
+    _shutil.rmtree(out_dir / "_source" / "cartridge")
+
+    rows = verify.check_coverage(out_dir, cartridge_dir=cartridge_dir)
+    row = next(row for row in rows
+              if row["check"] == "_source/{cartridge,elucidat,provenance} all present and non-empty")
+    assert row["ok"] is False
+    assert row["actual"]["cartridge"] is False
 
 
 def test_check_coverage_is_robust_to_a_missing_build_directory(tmp_path):
