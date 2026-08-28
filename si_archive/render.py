@@ -30,7 +30,7 @@ import shutil
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from si_archive import constants
+from si_archive import constants, media
 from si_archive.cartridge import slugify
 
 FILEBASE_RE = re.compile(r"%24IMS-CC-FILEBASE%24(/[^\"'\s>]*)")
@@ -509,6 +509,7 @@ def place_media(course, ledger, media_records, out_dir, build_dir=None):
             continue
         placed += 1
         stem = identity.stem
+        record = derived.get(str(identity), {})
 
         caption_source = None
         original_srt = identity.with_suffix(".srt")
@@ -518,9 +519,19 @@ def place_media(course, ledger, media_records, out_dir, build_dir=None):
                 caption_source = "original"
             except OSError:
                 pass
-        elif build_dir is not None:
-            whisper_srt = Path(build_dir) / "transcripts" / f"{stem}.srt"
-            if whisper_srt.exists():
+        elif (build_dir is not None and record.get("transcript")
+                and Path(record["transcript"]).exists()):
+            # Only look for a Whisper SRT when media.py actually produced a
+            # real transcript for this video. A no_speech/gap/
+            # transcription_failed record has no "transcript" key -- gating
+            # on it keeps Whisper's raw pre-degeneracy-screen SRT (e.g. "you
+            # you you...") from being surfaced as a caption track for a
+            # video that in fact has no real transcript.
+            # mlx_whisper's own filename guess can strip more of the source
+            # name than Path.stem does (see media.find_existing_srt), so
+            # reuse that lookup rather than an exact-name match here.
+            whisper_srt = media.find_existing_srt(Path(build_dir) / "transcripts", stem)
+            if whisper_srt is not None:
                 try:
                     shutil.copy2(whisper_srt, target_dir / f"{stem}.srt")
                     caption_source = "whisper"
@@ -530,7 +541,6 @@ def place_media(course, ledger, media_records, out_dir, build_dir=None):
             rel_video = str((target_dir / target_name).relative_to(out_dir))
             captions.append({"video": rel_video, "caption_source": caption_source})
 
-        record = derived.get(str(identity), {})
         for key, suffix in (("transcript", ".transcript.md"),
                              ("contactsheet", ".contactsheet.jpg")):
             value = record.get(key)
@@ -539,6 +549,19 @@ def place_media(course, ledger, media_records, out_dir, build_dir=None):
                     shutil.copy2(value, target_dir / f"{stem}{suffix}")
                 except OSError:
                     continue
+
+        # A no_speech/transcription_failed record has no "transcript" but
+        # does have a short, honest marker file explaining why -- place it
+        # alongside the video so a reader sees the archive is explicit
+        # about it, not silent. Copied under its own name (not a
+        # stem-derived one) since its naming isn't pinned by any ruling the
+        # way transcript/contactsheet are.
+        marker = record.get("marker")
+        if marker and Path(marker).exists():
+            try:
+                shutil.copy2(marker, target_dir / Path(marker).name)
+            except OSError:
+                pass
     return placed, captions
 
 

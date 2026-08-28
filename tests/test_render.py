@@ -380,14 +380,57 @@ def test_place_media_falls_back_to_a_whisper_srt_when_no_original_caption_exists
     build_dir = tmp_path / "_build"
     whisper_srt = _touch(build_dir / "transcripts" / "Talk.srt", "1\n00:00:00,000 --> 00:00:01,000\nHi\n")
     ledger = {"files": [{"canonical": str(video), "aliases": []}], "renditions": [], "online_only": []}
+    transcript = _touch(build_dir / "transcripts" / "Talk.transcript.md", "Hi\n")
+    media_records = [{"path": str(video), "status": "ok", "transcript": str(transcript)}]
 
-    placed, captions = render.place_media(course, ledger, [], tmp_path / "out", build_dir)
+    placed, captions = render.place_media(course, ledger, media_records, tmp_path / "out", build_dir)
 
     assert placed == 1
     out_srt = tmp_path / "out" / "orientation" / "media" / "Talk.srt"
     assert out_srt.exists()
     assert out_srt.read_text() == whisper_srt.read_text()
     assert captions == [{"video": "orientation/media/Talk.mp4", "caption_source": "whisper"}]
+
+
+def test_place_media_does_not_surface_a_stray_whisper_srt_for_a_no_speech_video(tmp_path):
+    # Regression: a video Whisper failed on (no real transcript, only a
+    # marker) can still have a raw pre-degeneracy-screen SRT sitting in
+    # build_dir/transcripts/ from the attempt. That SRT must never be
+    # copied in as if it were a real caption track.
+    course = {"sections": []}
+    video = _mp4(tmp_path / "campus.mitpeonline.com" / "Module 1" / "Silent.mp4")
+    build_dir = tmp_path / "_build"
+    _touch(build_dir / "transcripts" / "Silent.srt", "1\n00:00:00,000 --> 00:00:01,000\nyou you you\n")
+    ledger = {"files": [{"canonical": str(video), "aliases": []}], "renditions": [], "online_only": []}
+    media_records = [{"path": str(video), "status": "no_speech",
+                      "reason": "silent audio track", "marker": "/nonexistent/marker.md"}]
+
+    placed, captions = render.place_media(course, ledger, media_records, tmp_path / "out", build_dir)
+
+    assert placed == 1
+    assert not (tmp_path / "out" / "sections" / "04-module-1" / "media" / "Silent.srt").exists()
+    assert captions == []
+
+
+def test_place_media_finds_a_whisper_srt_despite_mlx_whisper_stripping_an_extra_segment(tmp_path):
+    # Regression for the mlx_whisper filename quirk (Ruling 27): it can
+    # treat a dot-separated segment of the source name as an extension too,
+    # writing a shorter .srt than the video's own stem.
+    course = {"sections": []}
+    video = _mp4(tmp_path / "campus.mitpeonline.com" / "pre" / "webinars" / "Talk.020322.mp4")
+    build_dir = tmp_path / "_build"
+    whisper_srt = _touch(build_dir / "transcripts" / "Talk.srt",
+                         "1\n00:00:00,000 --> 00:00:01,000\nHi\n")
+    ledger = {"files": [{"canonical": str(video), "aliases": []}], "renditions": [], "online_only": []}
+    transcript = _touch(build_dir / "transcripts" / "Talk.020322.transcript.md", "Hi\n")
+    media_records = [{"path": str(video), "status": "ok", "transcript": str(transcript)}]
+
+    placed, captions = render.place_media(course, ledger, media_records, tmp_path / "out", build_dir)
+
+    out_srt = tmp_path / "out" / "orientation" / "media" / "Talk.020322.srt"
+    assert out_srt.exists()
+    assert out_srt.read_text() == whisper_srt.read_text()
+    assert captions == [{"video": "orientation/media/Talk.020322.mp4", "caption_source": "whisper"}]
 
 
 def test_place_media_prefers_an_original_srt_over_a_whisper_one(tmp_path):
@@ -416,6 +459,24 @@ def test_place_media_tolerates_any_status_value_and_skips_missing_derived_files(
 
     assert placed == 1  # the video itself is still placed
     assert captions == []  # no caption artifact -- nothing crashed on the unknown status
+
+
+def test_place_media_places_the_no_speech_marker_alongside_its_video(tmp_path):
+    course = {"sections": []}
+    video = _mp4(tmp_path / "campus.mitpeonline.com" / "Module 2" / "Silent.mp4")
+    marker = _touch(tmp_path / "_build" / "transcripts" / "Silent.no_speech.md",
+                    "No speech detected in this video's audio track: silent audio track.\n")
+    ledger = {"files": [{"canonical": str(video), "aliases": []}], "renditions": [], "online_only": []}
+    media_records = [{"path": str(video), "status": "no_speech",
+                      "reason": "silent audio track", "marker": str(marker)}]
+
+    placed, captions = render.place_media(course, ledger, media_records, tmp_path / "out", tmp_path / "_build")
+
+    assert placed == 1
+    out_marker = tmp_path / "out" / "files" / "media" / "Silent.no_speech.md"
+    assert out_marker.exists()
+    assert out_marker.read_text() == marker.read_text()
+    assert captions == []  # a marker is not a caption track
 
 
 def test_place_media_skips_a_video_whose_source_file_is_missing(tmp_path):
