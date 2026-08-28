@@ -953,17 +953,29 @@ def test_clean_owned_output_removes_directories_a_superseded_version_wrote(tmp_p
     # wrote unlinked-pages/unlinked-assessments/unlinked-assignments/
     # unlinked-discussions/ as four separate top-level dirs (before they
     # were folded into one unlinked/ tree) must not leave that content
-    # stranded once a newer version only owns "unlinked".
-    for legacy in ("unlinked-pages", "unlinked-assessments",
-                  "unlinked-assignments", "unlinked-discussions"):
+    # stranded once a newer version only owns "unlinked". Reads the retired
+    # list itself, not a hardcoded copy of it -- so this test keeps proving
+    # the guarantee even as more names are retired in the future.
+    assert render.RETIRED_OWNED_TOP_LEVEL, "nothing to test -- add a retired name first"
+    for legacy in render.RETIRED_OWNED_TOP_LEVEL:
         (tmp_path / legacy).mkdir()
         (tmp_path / legacy / "old.html").write_text("stale")
 
     render.clean_owned_output(tmp_path)
 
-    for legacy in ("unlinked-pages", "unlinked-assessments",
-                  "unlinked-assignments", "unlinked-discussions"):
+    for legacy in render.RETIRED_OWNED_TOP_LEVEL:
         assert not (tmp_path / legacy).exists()
+
+
+def test_retired_top_level_names_are_folded_into_owned_top_level():
+    # A name can only ever move from CURRENT_OWNED_TOP_LEVEL into
+    # RETIRED_OWNED_TOP_LEVEL, never disappear from OWNED_TOP_LEVEL
+    # entirely -- that's what makes the clean step immune to its own
+    # renames. Also guards against ever *removing* a retired name outright,
+    # which would silently reopen this exact bug.
+    assert set(render.RETIRED_OWNED_TOP_LEVEL) <= set(render.OWNED_TOP_LEVEL)
+    assert set(render.CURRENT_OWNED_TOP_LEVEL) <= set(render.OWNED_TOP_LEVEL)
+    assert set(render.RETIRED_OWNED_TOP_LEVEL).isdisjoint(render.CURRENT_OWNED_TOP_LEVEL)
 
 
 def test_clean_owned_output_is_a_no_op_on_a_directory_that_does_not_exist_yet(tmp_path):
