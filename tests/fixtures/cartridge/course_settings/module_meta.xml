@@ -1,0 +1,726 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<modules xmlns="http://canvas.instructure.com/xsd/cccv1p0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://canvas.instructure.com/xsd/cccv1p0 https://canvas.instructure.com/xsd/cccv1p0.xsd">
+  <module identifier="gcfd35dce44ad120b96c712ce8401945f">
+    <title>Homepage</title>
+    <workflow_state>active</workflow_state>
+    <position>1</position>
+    <require_sequential_progress>false</require_sequential_progress>
+    <locked>false</locked>
+    <items>
+      <item identifier="g1843425a2581aa41c583425c714d282d">
+        <content_type>WikiPage</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Systematic Innovation: Scaling Up from a Hunch</title>
+        <identifierref>gef618e282aa67b5ed8515f7cd4a8ea78</identifierref>
+        <position>1</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+    </items>
+  </module>
+  <module identifier="ga5b07b3a08c241f696700e6482bd5b37">
+    <title>Requirements and Information</title>
+    <workflow_state>active</workflow_state>
+    <position>2</position>
+    <require_sequential_progress>false</require_sequential_progress>
+    <locked>false</locked>
+    <items>
+      <item identifier="gb54960b3d0885e312fbdf83dd8231d12">
+        <content_type>WikiPage</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Requirements</title>
+        <identifierref>g5108dfb9f58dad0685a756771a9fb63a</identifierref>
+        <position>1</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g5a8d0a1771a8ba9591a9830c06d9ea2e">
+        <content_type>WikiPage</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Information</title>
+        <identifierref>g49ecc99dfa9526ec98274e46413a2a6f</identifierref>
+        <position>2</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g3bfc3124b0ef466d20bd489e5fbb5ea6">
+        <content_type>Quizzes::Quiz</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Code of Conduct</title>
+        <identifierref>g63717adf72dec5f639423fee075d585c</identifierref>
+        <position>3</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+    </items>
+    <completionRequirements>
+      <completionRequirement type="must_view">
+        <identifierref>gb54960b3d0885e312fbdf83dd8231d12</identifierref>
+      </completionRequirement>
+      <completionRequirement type="must_view">
+        <identifierref>g5a8d0a1771a8ba9591a9830c06d9ea2e</identifierref>
+      </completionRequirement>
+      <completionRequirement type="must_submit">
+        <identifierref>g3bfc3124b0ef466d20bd489e5fbb5ea6</identifierref>
+      </completionRequirement>
+    </completionRequirements>
+  </module>
+  <module identifier="g1336ec042ad34c290ad2dfb72b60ca7a">
+    <title>Initial Survey</title>
+    <workflow_state>active</workflow_state>
+    <position>3</position>
+    <require_sequential_progress>false</require_sequential_progress>
+    <locked>false</locked>
+    <items>
+      <item identifier="g0ec28d59e73ca701122b57ba70a47e1c">
+        <content_type>Quizzes::Quiz</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Entry Survey</title>
+        <identifierref>gc7826f89e61cb8b822f66b2c3011641a</identifierref>
+        <position>1</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+    </items>
+    <completionRequirements>
+      <completionRequirement type="must_submit">
+        <identifierref>g0ec28d59e73ca701122b57ba70a47e1c</identifierref>
+      </completionRequirement>
+    </completionRequirements>
+  </module>
+  <module identifier="gfa8f55bee35f15970ca959d3b1a66f00">
+    <title>Module 1 - Part 1</title>
+    <workflow_state>active</workflow_state>
+    <position>5</position>
+    <unlock_at>2022-02-27T23:00:00</unlock_at>
+    <require_sequential_progress>false</require_sequential_progress>
+    <locked>false</locked>
+    <prerequisites>
+      <prerequisite type="context_module">
+        <title>Initial Survey</title>
+        <identifierref>g1336ec042ad34c290ad2dfb72b60ca7a</identifierref>
+      </prerequisite>
+      <prerequisite type="context_module">
+        <title>Requirements and Information</title>
+        <identifierref>ga5b07b3a08c241f696700e6482bd5b37</identifierref>
+      </prerequisite>
+    </prerequisites>
+    <items>
+      <item identifier="ga59a03502eff0a4a6e401acf6dadd6da">
+        <content_type>WikiPage</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 1</title>
+        <identifierref>g901168a3fb0096b26584cff9e8a9a74e</identifierref>
+        <position>1</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g5c7f0c266baee51a1ceff9da70398e22">
+        <content_type>WikiPage</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 1 - Content</title>
+        <identifierref>gb57784e55da01159abcbe799d2f0b310</identifierref>
+        <position>2</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="gdfe70959f428ccb345b1b8962e863bda">
+        <content_type>Quizzes::Quiz</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 1 Poll: How Easy Is It To Be Right? Part 1</title>
+        <identifierref>g212ed957417b8355594915db836218b6</identifierref>
+        <position>3</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+    </items>
+    <completionRequirements>
+      <completionRequirement type="must_submit">
+        <identifierref>gdfe70959f428ccb345b1b8962e863bda</identifierref>
+      </completionRequirement>
+    </completionRequirements>
+  </module>
+  <module identifier="g994acf36ab32e544a4d6d159cad6590a">
+    <title>Module 1 - Part 2 and 3</title>
+    <workflow_state>active</workflow_state>
+    <position>6</position>
+    <unlock_at>2022-02-27T23:00:00</unlock_at>
+    <require_sequential_progress>false</require_sequential_progress>
+    <locked>false</locked>
+    <prerequisites>
+      <prerequisite type="context_module">
+        <title>Initial Survey</title>
+        <identifierref>g1336ec042ad34c290ad2dfb72b60ca7a</identifierref>
+      </prerequisite>
+      <prerequisite type="context_module">
+        <title>Requirements and Information</title>
+        <identifierref>ga5b07b3a08c241f696700e6482bd5b37</identifierref>
+      </prerequisite>
+      <prerequisite type="context_module">
+        <title>Module 1 - Part 1</title>
+        <identifierref>gfa8f55bee35f15970ca959d3b1a66f00</identifierref>
+      </prerequisite>
+    </prerequisites>
+    <items>
+      <item identifier="g26eeb1ab6403d67c1ff8fad190838a90">
+        <content_type>DiscussionTopic</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 1 Forum: How Easy is it to be Right? Part 2 and 3</title>
+        <identifierref>g17a684fcde64609a7a977087039b32e6</identifierref>
+        <position>1</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+    </items>
+  </module>
+  <module identifier="g5acdbfbebe220747a7888dc152c85f8c">
+    <title>Module 1 - Part 4</title>
+    <workflow_state>active</workflow_state>
+    <position>7</position>
+    <unlock_at>2022-02-27T23:00:00</unlock_at>
+    <require_sequential_progress>false</require_sequential_progress>
+    <locked>false</locked>
+    <prerequisites>
+      <prerequisite type="context_module">
+        <title>Initial Survey</title>
+        <identifierref>g1336ec042ad34c290ad2dfb72b60ca7a</identifierref>
+      </prerequisite>
+      <prerequisite type="context_module">
+        <title>Requirements and Information</title>
+        <identifierref>ga5b07b3a08c241f696700e6482bd5b37</identifierref>
+      </prerequisite>
+      <prerequisite type="context_module">
+        <title>Module 1 - Part 2 and 3</title>
+        <identifierref>g994acf36ab32e544a4d6d159cad6590a</identifierref>
+      </prerequisite>
+    </prerequisites>
+    <items>
+      <item identifier="ge30db9b18f1d9bf9be37238dcc4c7b7a">
+        <content_type>Assignment</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 1 Assignment: Answers To Warm-up Activity: How Easy Is It To Be Right? Part 4</title>
+        <identifierref>ge6011589b0d5a22fa044ed842f13f246</identifierref>
+        <position>1</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g17f478813f864a7e74f2e0dfac3757f8">
+        <content_type>DiscussionTopic</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 1 Forum: True Beginnings </title>
+        <identifierref>g2e8f84957bdcfa57dff5700a537f0937</identifierref>
+        <position>2</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="gc4eb2aea0211e33bbcc6c606b504a848">
+        <content_type>Assignment</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 1 Assignment: Give Your Definitions </title>
+        <identifierref>g623f9943186b42f2c3e9c9ff26280630</identifierref>
+        <position>3</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g714f9889861bfebe32ae1f3a03f0be5c">
+        <content_type>Assignment</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 1 Assignment: What Went Wrong?</title>
+        <identifierref>g651080b69c122e1318182b1a9c4af5c1</identifierref>
+        <position>4</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g0f5f1baf0f00623f6ee1f7cf41b3367c">
+        <content_type>Assignment</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 1. Captain’s log</title>
+        <identifierref>g7d5aef1a7131975331d6ecce11d58a20</identifierref>
+        <position>5</position>
+        <new_tab/>
+        <indent>0</indent>
+      </item>
+    </items>
+  </module>
+  <module identifier="gac4f19fdd11bd41f92341c18ff975b9b">
+    <title>Module 2</title>
+    <workflow_state>active</workflow_state>
+    <position>8</position>
+    <unlock_at>2022-03-10T23:00:00</unlock_at>
+    <require_sequential_progress>false</require_sequential_progress>
+    <locked>false</locked>
+    <prerequisites>
+      <prerequisite type="context_module">
+        <title>Requirements and Information</title>
+        <identifierref>ga5b07b3a08c241f696700e6482bd5b37</identifierref>
+      </prerequisite>
+      <prerequisite type="context_module">
+        <title>Initial Survey</title>
+        <identifierref>g1336ec042ad34c290ad2dfb72b60ca7a</identifierref>
+      </prerequisite>
+    </prerequisites>
+    <items>
+      <item identifier="gb8b7f49609cc27117bbc2e89a5ab0446">
+        <content_type>WikiPage</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 2</title>
+        <identifierref>g1785813709613df3a44a46dac7e6671b</identifierref>
+        <position>1</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g52451dd2a453895293bd41ee22ce10b2">
+        <content_type>WikiPage</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 2 - Content</title>
+        <identifierref>g2ca883adc117b6e8650ddc310de422f0</identifierref>
+        <position>2</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="gb11a44c1bfbd0e3df05ecdcf4d20cfde">
+        <content_type>Assignment</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 2 Assignment: Back to the Future PART I</title>
+        <identifierref>g741cd8925f0e88e392c9a9a7b4c74974</identifierref>
+        <position>3</position>
+        <new_tab/>
+        <indent>0</indent>
+      </item>
+      <item identifier="g64fb907a7f8c103fd07de96c4189ba44">
+        <content_type>DiscussionTopic</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 2 Forum: Back to the Future PART II</title>
+        <identifierref>gc5faf63a36fed3f5d9d044294eb9ecc4</identifierref>
+        <position>4</position>
+        <new_tab/>
+        <indent>0</indent>
+      </item>
+      <item identifier="gd902db8bceb34b945782a070032d518c">
+        <content_type>Assignment</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 2 Assignment: Preposterous Combinations</title>
+        <identifierref>g6b8b51ed12de213ca85e01a4fd4bcd84</identifierref>
+        <position>5</position>
+        <new_tab/>
+        <indent>0</indent>
+      </item>
+      <item identifier="ga8c872a8d1d1488265bf4b3122a78420">
+        <content_type>DiscussionTopic</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 2 Forum: Hunch Time PART I</title>
+        <identifierref>g28d5a99ccf213bc6ca309527b3e75dc7</identifierref>
+        <position>6</position>
+        <new_tab/>
+        <indent>0</indent>
+      </item>
+      <item identifier="g6228077161a24d4f58c1f71f905c6eb4">
+        <content_type>DiscussionTopic</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 2 Forum: Hunch Time PART II</title>
+        <identifierref>g1a411b08ebc6a94dbed357ba01f997f1</identifierref>
+        <position>7</position>
+        <new_tab/>
+        <indent>0</indent>
+      </item>
+    </items>
+  </module>
+  <module identifier="g875acd507d8e66923d0d4e1e1a4510c0">
+    <title>Module 3</title>
+    <workflow_state>active</workflow_state>
+    <position>9</position>
+    <unlock_at>2022-03-20T23:00:00</unlock_at>
+    <require_sequential_progress>false</require_sequential_progress>
+    <locked>false</locked>
+    <prerequisites>
+      <prerequisite type="context_module">
+        <title>Initial Survey</title>
+        <identifierref>g1336ec042ad34c290ad2dfb72b60ca7a</identifierref>
+      </prerequisite>
+      <prerequisite type="context_module">
+        <title>Requirements and Information</title>
+        <identifierref>ga5b07b3a08c241f696700e6482bd5b37</identifierref>
+      </prerequisite>
+    </prerequisites>
+    <items>
+      <item identifier="g5011cf70a5c3befd65290eaa9519f886">
+        <content_type>WikiPage</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 3</title>
+        <identifierref>gb20a0a31291d5298d05d01427535990d</identifierref>
+        <position>1</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g8086f62e18dc74caa66f5ceadcd05858">
+        <content_type>WikiPage</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 3 - Content</title>
+        <identifierref>g7df73281a0f23f46d38839e64152e4c2</identifierref>
+        <position>2</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g01059ec97d2fe525e0a51beb6deaecc1">
+        <content_type>Assignment</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 3 Assignment: Your Assumptions Log</title>
+        <identifierref>g0c9eda2afde951762cdd86a0f78979df</identifierref>
+        <position>3</position>
+        <new_tab/>
+        <indent>0</indent>
+      </item>
+      <item identifier="g44a0a6339cbe80b4006fa7eb90f219cf">
+        <content_type>Assignment</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 3 Assignment: Your Being Wrong List</title>
+        <identifierref>g7e669e0bdbe7d1b325cf5b98c16b9012</identifierref>
+        <position>4</position>
+        <new_tab/>
+        <indent>0</indent>
+      </item>
+      <item identifier="g2e0ee172bfedc11ee440153008369f9f">
+        <content_type>Assignment</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 3 Assignment: Your Contact Log</title>
+        <identifierref>g5ae4d99ce461e961e9de4625fb7e9471</identifierref>
+        <position>4</position>
+        <new_tab/>
+        <indent>0</indent>
+      </item>
+      <item identifier="g33de8c96aae0fe5beb9c39163f052ebe">
+        <content_type>Assignment</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 3 Assignment: Your Organizational Hypothesis</title>
+        <identifierref>gb631894aeda9154510aaee5bf99bbc7b</identifierref>
+        <position>4</position>
+        <new_tab/>
+        <indent>0</indent>
+      </item>
+    </items>
+  </module>
+  <module identifier="ga62fdfd62e07d82774f91043ef2ffbb3">
+    <title>Module 4</title>
+    <workflow_state>active</workflow_state>
+    <position>10</position>
+    <unlock_at>2022-03-30T22:00:00</unlock_at>
+    <require_sequential_progress>false</require_sequential_progress>
+    <locked>false</locked>
+    <prerequisites>
+      <prerequisite type="context_module">
+        <title>Initial Survey</title>
+        <identifierref>g1336ec042ad34c290ad2dfb72b60ca7a</identifierref>
+      </prerequisite>
+      <prerequisite type="context_module">
+        <title>Requirements and Information</title>
+        <identifierref>ga5b07b3a08c241f696700e6482bd5b37</identifierref>
+      </prerequisite>
+    </prerequisites>
+    <items>
+      <item identifier="ga9fe13caa8c68b236712f89e172d388d">
+        <content_type>WikiPage</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 4</title>
+        <identifierref>g9f7be2783de445589ed64881c4895a20</identifierref>
+        <position>1</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g99f9be4028eadee3e7c6781150604bac">
+        <content_type>WikiPage</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 4 - Content</title>
+        <identifierref>gd51bcc004bceae1bf8eb713fda032288</identifierref>
+        <position>2</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g9addb81b7bda6a0d7551bb00768b1c5e">
+        <content_type>DiscussionTopic</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 4 Forum: Playing with Smart Electric Grids </title>
+        <identifierref>g98311504d5e919971940f626c1b3e0c2</identifierref>
+        <position>3</position>
+        <new_tab/>
+        <indent>0</indent>
+      </item>
+      <item identifier="g9838f3a183d7d532c0fd1022009e1e71">
+        <content_type>DiscussionTopic</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 4 Forum: Repurposing Parts</title>
+        <identifierref>gd95b3d709751b8f889675a05696a036b</identifierref>
+        <position>5</position>
+        <new_tab/>
+        <indent>0</indent>
+      </item>
+    </items>
+  </module>
+  <module identifier="gabaad4d5899a27dd81974f3ad59640d8">
+    <title>Module 5</title>
+    <workflow_state>active</workflow_state>
+    <position>11</position>
+    <unlock_at>2022-04-09T22:00:00</unlock_at>
+    <require_sequential_progress>false</require_sequential_progress>
+    <locked>false</locked>
+    <prerequisites>
+      <prerequisite type="context_module">
+        <title>Initial Survey</title>
+        <identifierref>g1336ec042ad34c290ad2dfb72b60ca7a</identifierref>
+      </prerequisite>
+      <prerequisite type="context_module">
+        <title>Requirements and Information</title>
+        <identifierref>ga5b07b3a08c241f696700e6482bd5b37</identifierref>
+      </prerequisite>
+    </prerequisites>
+    <items>
+      <item identifier="g28816ceeedd3d39edf34c0287e330ebf">
+        <content_type>WikiPage</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 5</title>
+        <identifierref>g3eb0c6968646c45e699d70b7f984d695</identifierref>
+        <position>1</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="gf716f058d809700edf38448c86ffd951">
+        <content_type>WikiPage</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 5 - Content</title>
+        <identifierref>g2481cfd9e59e9ad7eb244870d0f53e12</identifierref>
+        <position>2</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g3fcf6f2c0836680597c1927362131425">
+        <content_type>Assignment</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 5 assignment: Where’s Company X? </title>
+        <identifierref>g6b59840ed48f0b70ad2b0e9554815755</identifierref>
+        <position>3</position>
+        <new_tab/>
+        <indent>0</indent>
+      </item>
+      <item identifier="g58033c5f8778392ff91eda36ff892837">
+        <content_type>DiscussionTopic</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 5 forum: Thinking Backwards </title>
+        <identifierref>g23bd6dd1e47263f5acdb7d35b9369187</identifierref>
+        <position>4</position>
+        <new_tab/>
+        <indent>0</indent>
+      </item>
+    </items>
+  </module>
+  <module identifier="ge9ccee86fcfd75c907513aaf076162f5">
+    <title>Module 6</title>
+    <workflow_state>active</workflow_state>
+    <position>12</position>
+    <unlock_at>2022-04-17T22:00:00</unlock_at>
+    <require_sequential_progress>false</require_sequential_progress>
+    <locked>false</locked>
+    <prerequisites>
+      <prerequisite type="context_module">
+        <title>Initial Survey</title>
+        <identifierref>g1336ec042ad34c290ad2dfb72b60ca7a</identifierref>
+      </prerequisite>
+      <prerequisite type="context_module">
+        <title>Requirements and Information</title>
+        <identifierref>ga5b07b3a08c241f696700e6482bd5b37</identifierref>
+      </prerequisite>
+    </prerequisites>
+    <items>
+      <item identifier="g5d7eb0b50ebf5c85f33c79848e05243f">
+        <content_type>WikiPage</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 6</title>
+        <identifierref>g062e629543c6361d8346c036c18b1751</identifierref>
+        <position>1</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="gd40a444d4f9489673660c863d097af1b">
+        <content_type>WikiPage</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 6 - Content</title>
+        <identifierref>gd403fcdf78d621b1f91ef9d3c666f4e0</identifierref>
+        <position>2</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+      <item identifier="g3885cca6e9567b51c404743dec48e14d">
+        <content_type>Assignment</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 6 assignment: Final Technology-Problem Report </title>
+        <identifierref>gac7a312761716667b8f287b01d11d187</identifierref>
+        <position>3</position>
+        <new_tab/>
+        <indent>0</indent>
+      </item>
+      <item identifier="g0c6b03e63a07806d659e48eb56f268f2">
+        <content_type>DiscussionTopic</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 6 forum: The Invention of the Catapult </title>
+        <identifierref>gf2545f816faf4f22774e0d895e690c0f</identifierref>
+        <position>4</position>
+        <new_tab/>
+        <indent>0</indent>
+      </item>
+      <item identifier="gf1fb31eca81740ba4998ce48bb705e69">
+        <content_type>Assignment</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Module 6. Captain’s log</title>
+        <identifierref>g24235da49e47d51541e560aa39c0e64d</identifierref>
+        <position>5</position>
+        <new_tab/>
+        <indent>0</indent>
+      </item>
+    </items>
+  </module>
+  <module identifier="g869379eb611ffeec2935e686e34f3059">
+    <title>Final Survey</title>
+    <workflow_state>active</workflow_state>
+    <position>16</position>
+    <unlock_at>2022-04-17T22:00:00</unlock_at>
+    <require_sequential_progress>false</require_sequential_progress>
+    <locked>false</locked>
+    <items>
+      <item identifier="gbee8204563d2cd85b17b72fda8978fcd">
+        <content_type>Quizzes::Quiz</content_type>
+        <workflow_state>active</workflow_state>
+        <title>Exit Survey</title>
+        <identifierref>g0b39493bbcd821d09c40f1188cbaf2af</identifierref>
+        <position>1</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+    </items>
+    <completionRequirements>
+      <completionRequirement type="must_view">
+        <identifierref>gbee8204563d2cd85b17b72fda8978fcd</identifierref>
+      </completionRequirement>
+    </completionRequirements>
+  </module>
+  <module identifier="ge0921bc24e67a5e39f1317c5eec9a567">
+    <title>Final assessment</title>
+    <workflow_state>active</workflow_state>
+    <position>17</position>
+    <require_sequential_progress>false</require_sequential_progress>
+    <locked>false</locked>
+    <items>
+      <item identifier="g33b99aa4d06bb2f600b9f12d3598741e">
+        <content_type>Assignment</content_type>
+        <workflow_state>active</workflow_state>
+        <title> Final assessment</title>
+        <identifierref>g12bfac7a8d93d9448a2d7db2b20a0320</identifierref>
+        <position>2</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+    </items>
+    <completionRequirements>
+      <completionRequirement type="min_score">
+        <min_score>1.0</min_score>
+        <identifierref>g33b99aa4d06bb2f600b9f12d3598741e</identifierref>
+      </completionRequirement>
+    </completionRequirements>
+  </module>
+  <module identifier="g5a3d5958f47654bd77c7017c282e2460">
+    <title>Certificate of Completion</title>
+    <workflow_state>active</workflow_state>
+    <position>18</position>
+    <require_sequential_progress>false</require_sequential_progress>
+    <locked>false</locked>
+    <prerequisites>
+      <prerequisite type="context_module">
+        <title>Final assessment</title>
+        <identifierref>ge0921bc24e67a5e39f1317c5eec9a567</identifierref>
+      </prerequisite>
+    </prerequisites>
+    <items>
+      <item identifier="ge1bec16a21ce7d8e2e40d1272da650a7">
+        <content_type>ContextExternalTool</content_type>
+        <workflow_state>active</workflow_state>
+        <title> Certificate of Completion</title>
+        <identifierref>g822c34630fcd80214a9f6fedfe5df683</identifierref>
+        <url>https://api.accredible.com/v1/lti/launch</url>
+        <global_identifierref>118</global_identifierref>
+        <position>1</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+    </items>
+    <completionRequirements>
+      <completionRequirement type="must_view">
+        <identifierref>ge1bec16a21ce7d8e2e40d1272da650a7</identifierref>
+      </completionRequirement>
+    </completionRequirements>
+  </module>
+  <module identifier="gf49cc25cd16f32160f663e8cb788b550">
+    <title>MIT CEUs Survey</title>
+    <workflow_state>active</workflow_state>
+    <position>19</position>
+    <require_sequential_progress>false</require_sequential_progress>
+    <locked>false</locked>
+    <prerequisites>
+      <prerequisite type="context_module">
+        <title>Final Survey</title>
+        <identifierref>g869379eb611ffeec2935e686e34f3059</identifierref>
+      </prerequisite>
+    </prerequisites>
+    <items>
+      <item identifier="g7d2298c98d73026ab1c3e45add8a80f8">
+        <content_type>Quizzes::Quiz</content_type>
+        <workflow_state>active</workflow_state>
+        <title>MIT CEUs Survey</title>
+        <identifierref>g850dc37fa878e0fdc2b87ab22fa75bf3</identifierref>
+        <position>1</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+    </items>
+    <completionRequirements>
+      <completionRequirement type="must_submit">
+        <identifierref>g7d2298c98d73026ab1c3e45add8a80f8</identifierref>
+      </completionRequirement>
+    </completionRequirements>
+  </module>
+  <module identifier="g71086a72b8e455e66a712e0271bfbeed">
+    <title>Continuous Education Units</title>
+    <workflow_state>active</workflow_state>
+    <position>20</position>
+    <require_sequential_progress>false</require_sequential_progress>
+    <locked>false</locked>
+    <prerequisites>
+      <prerequisite type="context_module">
+        <title>Final Survey</title>
+        <identifierref>g869379eb611ffeec2935e686e34f3059</identifierref>
+      </prerequisite>
+      <prerequisite type="context_module">
+        <title>Certificate of Completion</title>
+        <identifierref>g5a3d5958f47654bd77c7017c282e2460</identifierref>
+      </prerequisite>
+      <prerequisite type="context_module">
+        <title>MIT CEUs Survey</title>
+        <identifierref>gf49cc25cd16f32160f663e8cb788b550</identifierref>
+      </prerequisite>
+    </prerequisites>
+    <items>
+      <item identifier="gdb9b57726564f0196b568ded9b7a790e">
+        <content_type>ContextExternalTool</content_type>
+        <workflow_state>active</workflow_state>
+        <title> MIT CEUs</title>
+        <identifierref>g27ebee02caa5f16f46369d0009fc88a6</identifierref>
+        <url>https://api.accredible.com/v1/lti/launch</url>
+        <global_identifierref>119</global_identifierref>
+        <position>1</position>
+        <new_tab>false</new_tab>
+        <indent>0</indent>
+      </item>
+    </items>
+    <completionRequirements>
+      <completionRequirement type="must_view">
+        <identifierref>gdb9b57726564f0196b568ded9b7a790e</identifierref>
+      </completionRequirement>
+    </completionRequirements>
+  </module>
+</modules>

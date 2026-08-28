@@ -34,6 +34,19 @@ def main(argv=None):
 
 
 def run_stage(name, args):
+    from pathlib import Path
+
+    from si_archive import constants
+
+    out = Path(args.out or constants.OUTPUT_ROOT)
+
+    if name == "cartridge":
+        from si_archive import cartridge
+        course = cartridge.write_course_json(constants.CARTRIDGE_DIR,
+                                             out / "_build" / "course.json")
+        print(f"    {len(course['sections'])} sections")
+        return
+
     raise NotImplementedError(f"stage {name!r} not yet implemented")
 
 

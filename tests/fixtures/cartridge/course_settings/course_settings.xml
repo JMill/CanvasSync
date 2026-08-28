@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<course identifier="g7b319b3d0696403a6e8781ec3e06607e" xmlns="http://canvas.instructure.com/xsd/cccv1p0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://canvas.instructure.com/xsd/cccv1p0 https://canvas.instructure.com/xsd/cccv1p0.xsd">
+  <title>Systematic Innovation: Scaling Up from a Hunch - February 2022</title>
+  <course_code>SISH-ENG-001-FEB22</course_code>
+  <start_at>2022-02-20T23:00:00</start_at>
+  <conclude_at>2022-10-26T21:59:00</conclude_at>
+  <tab_configuration>[{"id":0},{"id":14},{"id":1},{"id":6},{"id":5},{"id":3},{"id":10,"hidden":true},{"id":15,"hidden":true},{"id":8,"hidden":true},{"id":11,"hidden":true},{"id":4,"hidden":true},{"id":2,"hidden":true},{"id":18,"hidden":true}]</tab_configuration>
+  <image_identifier_ref>gc29304422b7c2ed0f00179d84c7492b5</image_identifier_ref>
+  <is_public>false</is_public>
+  <is_public_to_auth_users>false</is_public_to_auth_users>
+  <public_syllabus>false</public_syllabus>
+  <public_syllabus_to_auth>false</public_syllabus_to_auth>
+  <allow_student_wiki_edits>false</allow_student_wiki_edits>
+  <allow_student_forum_attachments>false</allow_student_forum_attachments>
+  <lock_all_announcements>true</lock_all_announcements>
+  <default_wiki_editing_roles>teachers</default_wiki_editing_roles>
+  <allow_student_organized_groups>false</allow_student_organized_groups>
+  <default_view>wiki</default_view>
+  <show_total_grade_as_points>false</show_total_grade_as_points>
+  <filter_speed_grader_by_student_group>false</filter_speed_grader_by_student_group>
+  <license>private</license>
+  <indexed>false</indexed>
+  <locale>en</locale>
+  <hide_final_grade>false</hide_final_grade>
+  <hide_distribution_graphs>false</hide_distribution_graphs>
+  <allow_student_discussion_topics>false</allow_student_discussion_topics>
+  <allow_student_discussion_editing>true</allow_student_discussion_editing>
+  <organize_epub_by_content_type>false</organize_epub_by_content_type>
+  <show_announcements_on_home_page>false</show_announcements_on_home_page>
+  <home_page_announcement_limit>3</home_page_announcement_limit>
+  <usage_rights_required>false</usage_rights_required>
+  <restrict_student_future_view>false</restrict_student_future_view>
+  <restrict_student_past_view>true</restrict_student_past_view>
+  <restrict_enrollments_to_course_dates>true</restrict_enrollments_to_course_dates>
+  <grading_standard_enabled>false</grading_standard_enabled>
+  <storage_quota>524288000</storage_quota>
+  <overridden_course_visibility></overridden_course_visibility>
+  <root_account_uuid>mYOi9JTSIPmYZblblVXGaYnA6HuRRpPVFl0cdh4I</root_account_uuid>
+  <default_post_policy>
+    <post_manually>false</post_manually>
+  </default_post_policy>
+</course>
