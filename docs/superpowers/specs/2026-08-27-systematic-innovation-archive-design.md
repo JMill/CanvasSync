@@ -23,7 +23,7 @@ file can be traced back to where it came from.
 
 | # | Source | Role | Inventory |
 |---|---|---|---|
-| 1 | `MIT Dropbox/…/Systematic Innovation/systematic-innovation-scaling-up-from-a-hunch-february-2022-export/` | **Canonical spine** — IMS Common Cartridge | 16 modules, 23 wiki pages, 24 assignments/discussions, 17 QTI quizzes, 81 web resources |
+| 1 | `MIT Dropbox/…/Systematic Innovation/systematic-innovation-scaling-up-from-a-hunch-february-2022-export/` | **Canonical spine** — IMS Common Cartridge | 16 modules, 45 module items (15 wiki pages, 14 assignments, 9 discussions, 5 quizzes, 2 LTI launches), 6 assessments + 11 question banks on disk, 81 web resources |
 | 2 | 7 Elucidat projects on `learning.elucidat.com` | **Primary course content** | 70 pages, 2.3 MB HTML, 100 CDN assets, 36 Vimeo embeds |
 | 3 | `MIT Dropbox/…/Systematic Innovation/campus.mitpeonline.com/` | Media + evidence layer | 49 MP4 (7.8 GB, 8.7 h), 27 SRT, 8 ScreenFlow (9.5 GB), screenshots |
 | 4 | GDrive `…/systematic innovation/` + `Downloads/Learning Facilitator…pdf` | Assignment specs + provenance | 3 DOCX, 1 email thread PDF |
@@ -196,10 +196,19 @@ Module 1 across three (`Module 1 - Part 1`, `- Part 2 and 3`, `- Part 4`). The
 site preserves that order because it is the course as actually taught; the
 Elucidat project for a section is inlined wherever the cartridge iframed it.
 
-**Quizzes.** All 17 QTI assessments render as readable documents — questions,
-options, and correct answers where the QTI records them. Several are surveys
-(`Initial Survey`, `Final Survey`, `MIT CEUs Survey`) with no correct answers;
-these render as questionnaires.
+**Quizzes.** `non_cc_assessments/` holds 17 files, but they are not 17 quizzes:
+**6 are real assessments** (`<assessment>`) and **11 are Canvas question banks**
+(`<objectbank>` — the pools quizzes draw from, unnamed, 3-36 questions each).
+Verified by parsing every file.
+
+Of the 6 assessments, five are reachable as module items (`Entry Survey`,
+`Exit Survey`, `Code of Conduct`, `Module 1 Poll`, `MIT CEUs Survey`); the sixth,
+`Survey: Webinar 1`, is in the manifest but in no module. All six render as
+readable documents — questions, options, and correct answers where the QTI
+records them. The surveys have no correct answers and render as questionnaires.
+`Survey: Webinar 1` renders in an unlinked-assessments section so it is not
+dropped, and the 11 banks render on one `question-banks.html` page marked as
+source pools rather than presented as quizzes.
 
 **Media placement.** Campus media maps to sections by its parent folder:
 `Module N/` → the corresponding section(s), `pre/` → `orientation/`, `post/` →
