@@ -97,10 +97,16 @@ def download(vid, vhash, out_dir):
     url = embed_url(vid, vhash)
     template = str(out_dir / f"{vid} - %(title)s.%(ext)s")
 
-    result = _run(_build_cmd(url, template))
-    if result.returncode != 0 and "TLS fingerprint" in (result.stderr or ""):
-        # Anti-bot fingerprinting; curl-cffi lets yt-dlp present a real browser TLS profile.
-        result = _run(_build_cmd(url, template, impersonate=True))
+    try:
+        result = _run(_build_cmd(url, template))
+        if result.returncode != 0 and "TLS fingerprint" in (result.stderr or ""):
+            # Anti-bot fingerprinting; curl-cffi lets yt-dlp present a real browser TLS profile.
+            result = _run(_build_cmd(url, template, impersonate=True))
+    except (subprocess.SubprocessError, FileNotFoundError) as exc:
+        # A 30-minute timeout on a large 1080p file, or yt-dlp missing from
+        # PATH, must become a gap like any other failure -- not abort the
+        # whole paced run over one bad video (mirror_project, probe_duration).
+        return _gap_record(vid, str(exc).strip()[-500:])
 
     if result.returncode != 0:
         return _gap_record(vid, (result.stderr or "").strip()[-500:])

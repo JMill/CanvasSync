@@ -1,3 +1,5 @@
+import subprocess
+
 from si_archive import vimeo
 
 
@@ -81,3 +83,58 @@ def test_gap_record_has_none_for_every_field_but_id_status_and_error():
     assert record == {"id": "777331374", "status": "gap", "path": None,
                        "title": None, "duration": None, "size": None,
                        "error": "blocked"}
+
+
+def test_download_never_raises_when_the_subprocess_call_times_out(monkeypatch, tmp_path):
+    # docstring says "Never raises" but nothing guarded the _run call site --
+    # a 30-minute cap on a large 1080p file makes this a real failure mode.
+    # No network call: _run itself is stubbed.
+    def fake_run(cmd):
+        raise subprocess.TimeoutExpired(cmd, 1800)
+
+    monkeypatch.setattr(vimeo, "_run", fake_run)
+    record = vimeo.download("1", None, tmp_path)
+    assert record["status"] == "gap"
+    assert record["error"]
+    assert "1800" in record["error"] or "timed out" in record["error"].lower()
+
+
+def test_download_never_raises_when_yt_dlp_is_missing_from_path(monkeypatch, tmp_path):
+    def fake_run(cmd):
+        raise FileNotFoundError(2, "No such file or directory", "yt-dlp")
+
+    monkeypatch.setattr(vimeo, "_run", fake_run)
+    record = vimeo.download("1", None, tmp_path)
+    assert record["status"] == "gap"
+    assert "yt-dlp" in record["error"] or "No such file" in record["error"]
+
+
+def test_download_never_raises_on_a_timeout_during_the_impersonate_retry(monkeypatch, tmp_path):
+    # The retry after a TLS-fingerprint block is a second _run call site --
+    # it needs the same guard as the first.
+    calls = []
+
+    def fake_run(cmd):
+        calls.append(cmd)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="TLS fingerprint block")
+        raise subprocess.TimeoutExpired(cmd, 1800)
+
+    monkeypatch.setattr(vimeo, "_run", fake_run)
+    record = vimeo.download("777331374", None, tmp_path)
+    assert len(calls) == 2
+    assert record["status"] == "gap"
+
+
+def test_gap_record_from_a_subprocess_exception_has_the_same_shape_as_any_other_gap(monkeypatch, tmp_path):
+    # Task 6 compares on `size`; a missing key reads as 0 and silently
+    # changes which copy of a video becomes canonical.
+    def fake_run(cmd):
+        raise subprocess.TimeoutExpired(cmd, 1800)
+
+    monkeypatch.setattr(vimeo, "_run", fake_run)
+    record = vimeo.download("1", None, tmp_path)
+    assert record == {"id": "1", "status": "gap", "path": None, "title": None,
+                       "duration": None, "size": None,
+                       "error": record["error"]}
+    assert "size" in record and record["size"] is None
