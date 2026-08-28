@@ -68,6 +68,28 @@ def test_check_reveal_skips_a_path_that_is_not_actually_a_file(tmp_path):
     assert verify.check_reveal(tmp_path) == []
 
 
+# `_source/` is the raw, pre-substitution Elucidat mirror -- its
+# "{{next.url}}"-style template tokens are not real links and were never
+# meant to resolve on disk (they're stripped/replaced only in the copy
+# under sections/*/elucidat/). A blind rglob over the whole archive found
+# 303 of these as "broken links" against the real build; both checks must
+# be scoped to the delivered site, not the read-only stage-input mirrors.
+
+def test_find_broken_links_ignores_the_unsubstituted_source_mirror(tmp_path):
+    source = tmp_path / "_source" / "elucidat" / "M1"
+    source.mkdir(parents=True)
+    (source / "01-page.html").write_text('<a href="{{next.url}}">next</a>')
+    assert verify.find_broken_links(tmp_path) == []
+
+
+def test_check_reveal_ignores_the_source_mirror(tmp_path):
+    source = tmp_path / "_source" / "elucidat" / "M1"
+    source.mkdir(parents=True)
+    (source / "01-page.html").write_text(
+        "<div>" + ("<span class='x'></span>" * 500) + "</div>")
+    assert verify.check_reveal(tmp_path) == []
+
+
 # --------------------------------------------------------- check_coverage -
 
 def _write_assessment(directory, ident, title):

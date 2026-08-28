@@ -36,6 +36,25 @@ EXTERNAL = ("http://", "https://", "mailto:", "data:", "#", "javascript:")
 EXPECTED_ELUCIDAT_PAGES = {"M1": 13, "M2": 10, "M3": 11, "M4": 10,
                           "M5": 12, "M6": 12, "INFO": 2}
 
+# _source/ and _build/ are read-only stage inputs/working artifacts, not
+# part of the delivered site -- render.py's own OWNED_TOP_LEVEL constant
+# and _owned_html_files docstring warn that a blind out_dir.rglob("*.html")
+# would also walk the raw Elucidat mirror under _source/elucidat/**/*.html,
+# whose unsubstituted "{{next.url}}"-style template tokens are not links at
+# all and were never meant to resolve on disk. Named by exclusion rather
+# than mirroring render.py's whitelist so a future top-level output render
+# adds doesn't need a matching update here to stay checked.
+NON_DELIVERABLE_TOP_LEVEL = {"_source", "_build"}
+
+
+def _site_html_files(out_dir):
+    """Every .html file under out_dir that is part of the delivered site."""
+    out_dir = Path(out_dir)
+    for page in sorted(out_dir.rglob("*.html")):
+        if page.relative_to(out_dir).parts[0] in NON_DELIVERABLE_TOP_LEVEL:
+            continue
+        yield page
+
 
 def _safe_json(path):
     """Load JSON, or None if the file is missing, unreadable or malformed.
@@ -50,9 +69,10 @@ def _safe_json(path):
 
 
 def find_broken_links(out_dir):
+    """Broken relative links in the delivered site (see NON_DELIVERABLE_TOP_LEVEL)."""
     out_dir = Path(out_dir)
     broken = []
-    for page in sorted(out_dir.rglob("*.html")):
+    for page in _site_html_files(out_dir):
         try:
             raw = page.read_text(errors="replace")
         except OSError:
@@ -95,10 +115,12 @@ def check_reveal(out_dir, min_ratio=0.05):
     """Flag pages whose visible text is anomalously thin for their markup.
 
     A page that survived baking but whose content never got revealed shows
-    up as a very low text-to-HTML ratio.
+    up as a very low text-to-HTML ratio. Scoped to the delivered site for
+    the same reason as `find_broken_links`: the raw Elucidat mirror under
+    `_source/` was never baked and isn't part of what a reader sees.
     """
     flagged = []
-    for page in sorted(Path(out_dir).rglob("*.html")):
+    for page in _site_html_files(out_dir):
         try:
             raw = page.read_text(errors="replace")
         except OSError:
