@@ -39,7 +39,8 @@ setup(name='CanvasSync',
       author_email='mathias@perslev.com',
       url='https://github.com/perslev/CanvasSync',
       license="LICENSE.txt",
-      packages=find_packages(),
+      packages=find_packages(include=['CanvasSync', 'CanvasSync.*', 'bin',
+                                       'si_archive', 'si_archive.*']),
       package_dir={'CanvasSync': 'CanvasSync'},
       entry_points={
           'console_scripts': [

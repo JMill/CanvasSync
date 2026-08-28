@@ -5,3 +5,10 @@ requests
 pycryptodome
 bcrypt
 six
+
+beautifulsoup4
+lxml
+yt-dlp
+Pillow
+mlx-whisper
+curl-cffi
