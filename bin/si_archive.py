@@ -47,6 +47,21 @@ def run_stage(name, args):
         print(f"    {len(course['sections'])} sections")
         return
 
+    if name == "elucidat":
+        import json
+
+        from si_archive import elucidat
+        from si_archive.net import Throttle
+        throttle = Throttle(min_gap=args.min_gap, jitter=args.jitter,
+                            rest_every=args.rest_every)
+        projects = elucidat.mirror_all(out / "_source" / "elucidat", throttle)
+        target = out / "_build" / "elucidat.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(projects, indent=2, ensure_ascii=False))
+        total = sum(len(p["pages"]) for p in projects.values())
+        print(f"    {len(projects)} projects, {total} pages")
+        return
+
     raise NotImplementedError(f"stage {name!r} not yet implemented")
 
 
