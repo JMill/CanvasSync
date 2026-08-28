@@ -26,7 +26,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from si_archive import constants, localsrc
-from si_archive.render import load_non_cc_assessments
+from si_archive.render import find_elucidat_embeds, load_non_cc_assessments
 
 HREF_RE = re.compile(r'(?:href|src)="([^"]+)"')
 TAG_RE = re.compile(r"<[^>]+>")
@@ -151,6 +151,35 @@ def _all_items(course):
             for item in section.get("items", [])]
 
 
+def _elucidat_delivered_counts(out_dir, course):
+    """Actual .html file count per Elucidat project, in the *delivered*
+    site (sections/<dirname>/elucidat/) -- not elucidat.json's `pages`
+    list length.
+
+    A partially-gapped mirror keeps a full-length `pages` list:
+    elucidat.py's `mirror_project` appends a `_page_gap(...)` record
+    (status "gap", file None, no HTML written) for each failed page and
+    continues, by design, so the list is the same length whether every
+    page made it or only some did. Counting files that actually exist on
+    disk, in the directory a reader would actually be served from, is the
+    only form of this check that a partially-broken mirror can't fool.
+
+    Never raises on its own -- any lookup failure here (a malformed
+    course.json, a project `find_elucidat_embeds` couldn't place) becomes
+    a failed row via `_row`'s wrapper, same as every other check.
+    """
+    embeds = find_elucidat_embeds(course or {"sections": []})
+    counts = {}
+    for key in EXPECTED_ELUCIDAT_PAGES:
+        embed = embeds.get(key)
+        if embed is None:
+            counts[key] = 0  # never placed in any course item -- nothing delivered
+            continue
+        page_dir = Path(out_dir) / "sections" / embed["section"]["dirname"] / "elucidat"
+        counts[key] = len(list(page_dir.glob("*.html"))) if page_dir.is_dir() else 0
+    return counts
+
+
 def check_coverage(out_dir, cartridge_dir=None):
     """Coverage assertions against known-good denominators (Ruling 16).
 
@@ -179,8 +208,9 @@ def check_coverage(out_dir, cartridge_dir=None):
     _row(rows, "Elucidat projects", 7, lambda: (len(elucidat), len(elucidat) == 7))
 
     def _elucidat_pages():
-        actual = {key: len(value.get("pages", [])) for key, value in elucidat.items()}
-        return (f"{sum(actual.values())} {actual}", actual == EXPECTED_ELUCIDAT_PAGES)
+        counts = _elucidat_delivered_counts(out_dir, course)
+        breakdown = ", ".join(f"{key} {counts[key]}" for key in EXPECTED_ELUCIDAT_PAGES)
+        return (f"{sum(counts.values())} ({breakdown})", counts == EXPECTED_ELUCIDAT_PAGES)
     _row(rows, "Elucidat pages",
         "70 (M1 13, M2 10, M3 11, M4 10, M5 12, M6 12, INFO 2)", _elucidat_pages)
 
@@ -188,6 +218,17 @@ def check_coverage(out_dir, cartridge_dir=None):
         empty = [key for key, value in elucidat.items() if not value.get("pages")]
         return (empty, empty == [])
     _row(rows, "Elucidat projects mirroring 0 pages", 0, _empty_projects)
+
+    def _elucidat_page_gaps():
+        # `status` is per-page; older elucidat.json runs (including the real
+        # archive's current one) predate the field entirely, so its absence
+        # must not read as a gap -- only an explicit "gap" counts.
+        gapped = [f"{key}/{page.get('id') or page.get('slug') or '?'}"
+                 for key, project in elucidat.items()
+                 for page in (project.get("pages") or [])
+                 if page.get("status") == "gap"]
+        return (gapped, gapped == [])
+    _row(rows, "Elucidat page-level gaps", 0, _elucidat_page_gaps)
 
     # ---- Cartridge ----
     _row(rows, "Cartridge sections", 16,
@@ -283,6 +324,29 @@ def check_coverage(out_dir, cartridge_dir=None):
     _row(rows, "transcription_failed (real content loss -- named individually below)", 0,
         _transcription_failed)
 
+    # The five checks above read only media.json -- the manifest the media
+    # stage itself writes -- so they check the manifest's self-consistency,
+    # not the manifest against reality. This one instead counts real files
+    # on disk (the artifacts a reader would actually open) and compares
+    # them to what the manifest claims, so a status mislabelled in the
+    # manifest (e.g. a real transcription failure recorded as "no_speech")
+    # can't hide behind an internally-consistent-looking media.json.
+    def _media_artifacts_match_manifest():
+        transcripts_dir = build / "transcripts"
+        transcript_files = (len(list(transcripts_dir.glob("*.transcript.md")))
+                            if transcripts_dir.is_dir() else 0)
+        marker_files = (len(list(transcripts_dir.glob("*.no_speech.md")))
+                        if transcripts_dir.is_dir() else 0)
+        ok_count = status_counts.get("ok", 0)
+        no_speech_count = status_counts.get("no_speech", 0)
+        actual = (f"{transcript_files} .transcript.md files / {ok_count} 'ok' records; "
+                 f"{marker_files} .no_speech.md markers / {no_speech_count} "
+                 "'no_speech' records")
+        return (actual, transcript_files == ok_count and marker_files == no_speech_count)
+    _row(rows, "Media artifacts on disk match manifest (independent of media.json)",
+        "transcript files == 'ok' records; no_speech markers == 'no_speech' records",
+        _media_artifacts_match_manifest)
+
     # ---- Assessments and question banks ----
     try:
         assessments, banks, _qti_gaps = load_non_cc_assessments(cartridge_dir)
@@ -346,6 +410,20 @@ def build_report(out_dir):
     for row in coverage:
         mark = "PASS" if row["ok"] else "FAIL"
         lines.append(f"| {row['check']} | {row['expected']} | {row['actual']} | {mark} |")
+    lines.append("")
+    lines.append(
+        "A caveat on five of the rows above: `Every video accounted for`, "
+        "`Transcription gaps (status == 'gap')`, `Transcripts, as a share of "
+        "videos that have speech`, `no_speech videos` and `transcription_failed` "
+        "are all read entirely from `media.json` -- the manifest the media "
+        "stage itself writes. They check that manifest for internal "
+        "self-consistency, not against what's actually on disk, so a status "
+        "mislabelled at write time (e.g. real content loss recorded as the "
+        "expected, harmless `no_speech`) would pass all five without being "
+        "caught. `Media artifacts on disk match manifest (independent of "
+        "media.json)`, also above, is the one row in this block that checks "
+        "reality instead: it counts actual `.transcript.md` and `.no_speech.md` "
+        "files and compares them to the manifest's claims.")
     lines.append("")
 
     # ---- Transcription status in detail (Ruling 33) ----

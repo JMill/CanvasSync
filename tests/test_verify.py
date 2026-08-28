@@ -115,7 +115,13 @@ def _write_bank(directory, ident):
 
 
 def _good_build(tmp_path):
-    """A minimal build where every Ruling-16 coverage check should pass."""
+    """A minimal build where every Ruling-16 coverage check should pass,
+    including on-disk artifacts for the two independent checks added for
+    Findings 1 and 2: real delivered Elucidat pages under
+    sections/<dirname>/elucidat/ (one directory per project, exactly the
+    way render.py actually delivers them), and real transcript/marker
+    files under _build/transcripts/ matching media.json's counts.
+    """
     out_dir = tmp_path / "archive"
     build = out_dir / "_build"
     build.mkdir(parents=True)
@@ -132,18 +138,50 @@ def _good_build(tmp_path):
         {"kind": "quiz", "title": "CEUs Survey",
          "content": {"questions": [{}] * 7}},
     ]
-    items = (quiz_items
-             + [{"kind": "page", "title": f"Page {i}"} for i in range(15)]
+    # 8 (not 15) non-Elucidat pages -- the other 7 "page" slots below are
+    # each one project's Elucidat-embedding item, keeping the total item
+    # count at 45.
+    non_elucidat_items = (quiz_items
+             + [{"kind": "page", "title": f"Page {i}"} for i in range(8)]
              + [{"kind": "discussion", "title": f"Disc {i}"} for i in range(9)]
              + [{"kind": "assignment", "title": f"Assign {i}"} for i in range(14)]
              + [{"kind": "external_tool", "title": f"LTI {i}"} for i in range(2)])
-    sections = [{"title": "S1", "items": items}]
-    sections += [{"title": f"S{i}", "items": []} for i in range(2, 17)]
+
+    # One dedicated section per Elucidat project -- render.py delivers each
+    # project's pages under its embedding section's own elucidat/ directory,
+    # so distinct projects need distinct sections to land in distinct
+    # directories on disk.
+    elucidat_sections = []
+    for key, code in constants.ELUCIDAT_PROJECTS.items():
+        dirname = f"e-{key.lower()}"
+        embed_item = {"kind": "page", "title": f"{key} landing",
+                     "content": {"html":
+                         f'<iframe src="https://learning.elucidat.com/course/{code}">'
+                         '</iframe>'}}
+        elucidat_sections.append(
+            {"title": key, "dirname": dirname, "items": [embed_item]})
+
+    sections = [{"title": "S1", "dirname": "01-s1", "items": non_elucidat_items}]
+    sections += elucidat_sections
+    sections += [{"title": f"S{i}", "dirname": f"s{i}", "items": []}
+                for i in range(2, 10)]
+    assert len(sections) == 16
     (build / "course.json").write_text(json.dumps({"sections": sections}))
 
-    elucidat = {key: {"pages": [{}] * n}
+    elucidat = {key: {"pages": [{"id": f"{key}-{i}", "slug": f"{key}-{i}",
+                                 "status": "ok"} for i in range(n)]}
                for key, n in verify.EXPECTED_ELUCIDAT_PAGES.items()}
     (build / "elucidat.json").write_text(json.dumps(elucidat))
+
+    # The actual delivered pages -- what the new file-count-based "Elucidat
+    # pages" check reads, instead of trusting elucidat.json's page-list
+    # length (see Finding 1).
+    for section in elucidat_sections:
+        key = section["title"]
+        page_dir = out_dir / "sections" / section["dirname"] / "elucidat"
+        page_dir.mkdir(parents=True)
+        for i in range(verify.EXPECTED_ELUCIDAT_PAGES[key]):
+            (page_dir / f"{key}-{i}.html").write_text("<html>page</html>")
 
     vimeo = [{"id": str(i), "status": "ok"} for i in range(36)]
     (build / "vimeo.json").write_text(json.dumps(vimeo))
@@ -155,6 +193,16 @@ def _good_build(tmp_path):
     media = ([{"path": f"v{i}.mp4", "status": "ok"} for i in range(38)]
              + [{"path": f"v{i}.mp4", "status": "no_speech"} for i in range(38, 47)])
     (build / "media.json").write_text(json.dumps(media))
+
+    # The actual transcript/marker artifacts -- what the new
+    # "Media artifacts on disk match manifest" check reads, instead of
+    # trusting media.json's own status counts (see Finding 2).
+    transcripts_dir = build / "transcripts"
+    transcripts_dir.mkdir()
+    for i in range(38):
+        (transcripts_dir / f"v{i}.transcript.md").write_text("a transcript\n")
+    for i in range(38, 47):
+        (transcripts_dir / f"v{i}.no_speech.md").write_text("no speech detected\n")
 
     cartridge_dir = tmp_path / "cartridge"
     assessments_dir = cartridge_dir / "non_cc_assessments"
@@ -174,6 +222,63 @@ def test_check_coverage_all_pass_for_a_known_good_build(tmp_path):
     assert len(rows) >= 18
     for row in rows:
         assert set(row) == {"check", "expected", "actual", "ok"}
+
+
+def test_check_coverage_flags_a_partially_gapped_elucidat_project(tmp_path):
+    """Finding 1: elucidat.py's mirror_project appends a gap record (status
+    "gap", file None, no HTML written) for each failed page and keeps going
+    -- so a project's `pages` list stays full-length even when some of its
+    pages never made it to disk. A naive `len(pages)` count can't tell a
+    3-of-13-gapped project from a clean one; only counting what's actually
+    delivered can.
+    """
+    out_dir, cartridge_dir = _good_build(tmp_path)
+    build = out_dir / "_build"
+
+    # Mark 3 of M1's 13 manifest entries as page-level gaps -- the list
+    # stays 13 long, exactly like the real mirror stage's behavior -- and
+    # remove the matching files from what was actually delivered.
+    elucidat = json.loads((build / "elucidat.json").read_text())
+    for page in elucidat["M1"]["pages"][:3]:
+        page["status"] = "gap"
+        page["file"] = None
+    (build / "elucidat.json").write_text(json.dumps(elucidat))
+
+    page_dir = out_dir / "sections" / "e-m1" / "elucidat"
+    for i in range(3):
+        (page_dir / f"M1-{i}.html").unlink()
+
+    rows = verify.check_coverage(out_dir, cartridge_dir=cartridge_dir)
+
+    pages_row = next(row for row in rows if row["check"] == "Elucidat pages")
+    assert pages_row["ok"] is False
+    assert "M1 10" in pages_row["actual"]  # 13 - 3, not the manifest's stale 13
+
+    gap_row = next(row for row in rows if row["check"] == "Elucidat page-level gaps")
+    assert gap_row["ok"] is False
+    assert len(gap_row["actual"]) == 3
+
+
+def test_check_coverage_flags_missing_transcript_artifacts(tmp_path):
+    """Finding 2: 'Every video accounted for' and its neighbors read only
+    media.json, the file the media stage itself writes -- a status
+    mislabelled at write time would pass all of them. The independent
+    check must catch a manifest that claims more 'ok' transcriptions than
+    there are .transcript.md files actually on disk.
+    """
+    out_dir, cartridge_dir = _good_build(tmp_path)
+    build = out_dir / "_build"
+
+    # Delete a real transcript file without touching media.json -- the
+    # manifest still claims 38 "ok" records, but only 37 exist.
+    (build / "transcripts" / "v0.transcript.md").unlink()
+
+    rows = verify.check_coverage(out_dir, cartridge_dir=cartridge_dir)
+    row = next(row for row in rows
+              if row["check"] == "Media artifacts on disk match manifest "
+                                  "(independent of media.json)")
+    assert row["ok"] is False
+    assert "37" in row["actual"] and "38" in row["actual"]
 
 
 def test_check_coverage_flags_a_systematic_vimeo_failure(tmp_path):
