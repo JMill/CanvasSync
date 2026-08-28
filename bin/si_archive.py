@@ -102,6 +102,19 @@ def run_stage(name, args):
         print(f"    {len(ok)}/{len(records)} transcripts, {len(sheets)} contact sheets")
         return
 
+    if name == "reconcile":
+        import json
+
+        from si_archive import reconcile
+        local = json.loads((out / "_build" / "local.json").read_text())
+        vimeo_records = json.loads((out / "_build" / "vimeo.json").read_text())
+        ledger = reconcile.build_ledger(local, vimeo_records)
+        (out / "_build" / "ledger.json").write_text(
+            json.dumps(ledger, indent=2, ensure_ascii=False))
+        for key, value in ledger["stats"].items():
+            print(f"    {key}: {value}")
+        return
+
     raise NotImplementedError(f"stage {name!r} not yet implemented")
 
 
