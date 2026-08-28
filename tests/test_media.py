@@ -1,3 +1,4 @@
+from collections import Counter
 from unittest.mock import MagicMock, patch
 
 from si_archive import media
@@ -427,3 +428,140 @@ def test_transcribe_records_transcription_failed_when_recovery_does_not_help(tmp
     assert "Transcription failed" in marker.read_text()
     # The original failed attempt is preserved alongside the still-bad retry.
     assert (tmp_path / "webinar.failed-attempt.srt").exists()
+
+
+# --- Review fix 1: a failed re-attempt must not destroy a correct prior
+# --- artifact (mirror of the stale-clearing tests above) -------------------
+
+
+def test_transcribe_leaves_a_valid_prior_marker_untouched_when_a_reattempt_fails(tmp_path):
+    """A re-run that then FAILS must not destroy a correct artifact a
+    previous run left behind. This is the mirror bug of the stale-clearing
+    tests above: those clear a *superseded* artifact once a new verdict is
+    confirmed; this reproduces clearing happening unconditionally before
+    any new work is attempted, which destroys a *correct* artifact when
+    the new attempt goes on to fail. Reproduces the reviewer's repro:
+    seed a valid no_speech.md marker, mock the volume probe to fail open
+    (no parseable max_volume -> None -> not silent), then mock whisper
+    raising SubprocessError.
+    """
+    mp4 = tmp_path / "webinar.mp4"
+    out = tmp_path / "webinar.transcript.md"
+    marker = tmp_path / "webinar.no_speech.md"
+    marker.write_text(
+        "No speech detected in this video's audio track: silent audio track.\n"
+        "No transcript was produced. See media.json for details.\n")
+
+    def fake_run(cmd, **kwargs):
+        if "volumedetect" in cmd:
+            return MagicMock(stderr="")  # unparseable -- probe fails open (None)
+        raise media.subprocess.SubprocessError("whisper crashed")
+
+    with patch.object(media.subprocess, "run", side_effect=fake_run):
+        result = media.transcribe(str(mp4), out)
+
+    assert result["status"] == "gap"
+    assert not out.exists()
+    # The pre-existing marker must survive a failed attempt untouched.
+    assert marker.exists()
+    assert "silent audio track" in marker.read_text()
+    assert [p.name for p in tmp_path.glob("webinar.*")] == [marker.name]
+
+
+# --- Review fix 2: compression ratio as the primary degeneracy rule -------
+
+# 40 distinct, unrelated words -- the reviewer's construction for a loop
+# that evades all three of the older rules (unique-word count, top-word
+# share, type-token ratio) regardless of how many times it cycles.
+CYCLE_WORDS = [
+    "orbit", "velvet", "granite", "whisper", "cactus", "harbor", "lantern",
+    "meadow", "quartz", "ribbon", "silver", "timber", "umbrella", "violet",
+    "walnut", "yonder", "zephyr", "amber", "brook", "cedar", "delta",
+    "ember", "frost", "glacier", "honey", "ivory", "jasper", "kelp",
+    "lunar", "marble", "nectar", "opal", "pebble", "quiver", "raven",
+    "sable", "thistle", "urchin", "vapor", "willow",
+]
+assert len(CYCLE_WORDS) == 40
+
+
+def _srt_word_cycle(vocab, cycles, cue_seconds=1, start_seconds=0):
+    """One distinct word per cue, cycling through `vocab` in the same fixed
+    order `cycles` times -- a longer-period loop than `_srt_phrase_loop`'s
+    6 phrases, used to stress the compression-ratio rule specifically.
+    """
+    cues = []
+    i = 0
+    for _ in range(cycles):
+        for word in vocab:
+            t0 = start_seconds + i * cue_seconds
+            t1 = t0 + cue_seconds
+            cues.append(f"{i + 1}\n{_ts(t0)} --> {_ts(t1)}\n{word}")
+            i += 1
+    return "\n\n".join(cues) + "\n"
+
+
+def test_is_degenerate_transcript_flags_a_sustained_word_cycle_via_compression_ratio():
+    """40 distinct words cycled 25 times (1000 words) -- the reviewer's
+    evading shape, sustained for a realistic number of repeats (a real
+    Whisper repetition loop, once triggered, continues for the rest of the
+    audio rather than stopping after a handful of repeats). Rules 1-3
+    alone would miss this, exactly as the reviewer demonstrated; the
+    compression-ratio rule must catch it.
+    """
+    text = media.srt_to_markdown(_srt_word_cycle(CYCLE_WORDS, cycles=25))
+    words = media.WORD_RE.findall(text.lower())
+    counts = Counter(words)
+    unique = len(counts)
+    top_share = counts.most_common(1)[0][1] / len(words)
+    # Sanity-check the fixture evades rules 1-3, the same shape the
+    # reviewer's minimal case did -- rule 4 (compression) must be what
+    # catches it, not a coincidence with the older rules.
+    assert unique >= media.DEGENERATE_MIN_UNIQUE_WORDS
+    assert top_share < media.DEGENERATE_TOP_WORD_SHARE
+    assert len(words) > media.DEGENERATE_TYPE_TOKEN_RATIO_MIN_WORDS
+    assert (unique / len(words)) >= media.DEGENERATE_MIN_TYPE_TOKEN_RATIO
+    assert media.is_degenerate_transcript(text)
+
+
+def test_is_degenerate_transcript_does_not_flag_a_minimal_six_cycle_probe():
+    """Documents a known, deliberately accepted boundary: the reviewer's
+    literal minimal construction -- 40 distinct words cycled exactly 6
+    times, 240 words, just past the 200-word compression floor -- is NOT
+    flagged.
+
+    This is calibrated against this archive's real data, not an oversight:
+    at 6 cycles this probe compresses to ~10-12% of its raw size, which is
+    indistinguishable from two of the archive's real, legitimate
+    technical-explainer transcripts (Wii Remote and Henry Ford measure
+    10.1-10.7%; see DEGENERATE_COMPRESSION_RATIO_MAX's docstring in
+    media.py for the full calibration). Catching this exact minimal probe
+    would require a threshold that misclassifies those two real,
+    already-shipped transcripts -- so it isn't caught. Once a loop sustains
+    for more repeats (any vocabulary size), it drops well clear of the
+    healthy range -- see the test above.
+    """
+    text = media.srt_to_markdown(_srt_word_cycle(CYCLE_WORDS, cycles=6))
+    words = media.WORD_RE.findall(text.lower())
+    assert len(words) == 240
+    assert len(set(words)) == 40  # still evades rules 1-3, same as the reviewer found
+    assert not media.is_degenerate_transcript(text)
+
+
+def test_is_degenerate_transcript_still_flags_the_older_loop_shapes():
+    """The compression rule is additive -- the two loop shapes this corpus
+    actually exhibited must still be caught."""
+    single_word = media.srt_to_markdown(
+        "\n\n".join(f"{i}\n00:00:{i:02d},000 --> 00:00:{i + 1:02d},000\nyou"
+                    for i in range(1, 60)))
+    assert media.is_degenerate_transcript(single_word)
+
+    phrase_loop = media.srt_to_markdown(_srt_phrase_loop(repeats=400, start_seconds=0))
+    assert media.is_degenerate_transcript(phrase_loop)
+
+
+def test_is_degenerate_transcript_still_accepts_realistic_prose():
+    """The compression rule must not false-positive on real, non-repetitive
+    prose -- re-asserts the existing acceptance test still holds with the
+    new rule in place."""
+    text = media.srt_to_markdown(_srt_from_sentences(REALISTIC_TRANSCRIPT))
+    assert not media.is_degenerate_transcript(text)

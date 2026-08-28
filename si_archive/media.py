@@ -31,6 +31,7 @@ Either non-`"ok"` status gets an honest marker file in place of a
 """
 import re
 import subprocess
+import zlib
 from collections import Counter
 from pathlib import Path
 
@@ -61,6 +62,37 @@ DEGENERATE_MIN_UNIQUE_WORDS = 25
 # meaningful past a couple hundred words, where the ratio stops being noisy.
 DEGENERATE_MIN_TYPE_TOKEN_RATIO = 0.02
 DEGENERATE_TYPE_TOKEN_RATIO_MIN_WORDS = 200
+
+# The three rules above only cover the two loop shapes this corpus actually
+# exhibited (a single repeated token, and a short repeated phrase) -- a
+# loop cycling through dozens of distinct invented words takes many more
+# words before its type-token ratio collapses below the 2% floor above,
+# and would ship as "ok". Compression ratio catches repetition at ANY
+# period, because that's what compression measures, so it's the primary
+# guard; the three rules above stay on as secondary coverage.
+#
+# Calibrated against this archive's real data, not guessed: the two known
+# real hallucination loops -- MITPE-Onboarding-ENG-020322 and
+# MITPE.FW.SISH.ENG's first whisper attempts, both "I'm a graduate student
+# at MIT."-style phrase loops before the condition_on_previous_text=False
+# recovery fixed them -- compress to 0.5% and 0.9% of their raw size. The
+# least compressible of the 38 shipped healthy transcripts (a dense,
+# narrow-topic explainer video) compresses to 8.5%. That's a ~10x gap, and
+# 6% sits with real margin on both sides of it (2.5 points below the
+# healthy floor, 5.1 points above the worst real failure).
+#
+# What this does NOT catch: an artificially minimal loop of only a
+# handful of repeats. Compression needs enough total repeats to show a
+# real gain -- 40 distinct words cycled just 6 times (240 words, the
+# minimum to clear DEGENERATE_COMPRESSION_MIN_WORDS below) compresses to
+# only ~10-12%, indistinguishable from two of this archive's real, legit
+# technical/narrow-topic videos (10.1% and 10.7%) -- so it is not flagged,
+# by design: catching it would require a threshold that misclassifies
+# those two real transcripts. Once a loop sustains for ~15+ repeats
+# (regardless of vocabulary size), its ratio drops under 5.5% and clears
+# the healthy floor with real margin -- see test_media.py.
+DEGENERATE_COMPRESSION_RATIO_MAX = 0.06
+DEGENERATE_COMPRESSION_MIN_WORDS = 200
 
 # For splitting "no speech" from "speech Whisper failed to transcribe":
 # chunk the transcript into windows this wide and screen each on its own.
@@ -112,14 +144,19 @@ def is_silent(max_volume_db):
 
 
 def is_degenerate_transcript(text):
-    """Flag Whisper hallucination: a handful of words or a short phrase
-    looping rather than real prose.
+    """Flag Whisper hallucination: a repetition loop of any period (single
+    word, short phrase, or a longer cycle of distinct words) rather than
+    real prose.
     """
     words = WORD_RE.findall(text.lower())
     if not words:
         return True
-    counts = Counter(words)
     total = len(words)
+    if total > DEGENERATE_COMPRESSION_MIN_WORDS:
+        raw = text.encode("utf-8")
+        if len(zlib.compress(raw)) / len(raw) < DEGENERATE_COMPRESSION_RATIO_MAX:
+            return True
+    counts = Counter(words)
     unique = len(counts)
     top_share = counts.most_common(1)[0][1] / total
     if top_share > DEGENERATE_TOP_WORD_SHARE or unique < DEGENERATE_MIN_UNIQUE_WORDS:
@@ -272,6 +309,32 @@ def _attempt_recovery(mp4_path, out_dir, stem, produced):
     return find_produced_srt(out_dir, stem, before)
 
 
+def _clear_superseded_artifacts(out_dir, stem, out_path, status):
+    """Remove whatever a previous run for this stem left behind, other than
+    the artifact `status` is about to become -- a re-run can reach a
+    different verdict than a previous run did (that's the point of the
+    guards in `transcribe`), and the archive must never show two
+    contradictory outcomes side by side.
+
+    Called only once the new result is confirmed, immediately before it's
+    written -- never at the top of `transcribe`, before any new work has
+    even been attempted. That ordering matters: if it ran unconditionally
+    up front and the new attempt then failed (probe fails open, whisper
+    errors or times out, no srt produced), a correct prior artifact would
+    be destroyed and nothing would replace it. A failed attempt must never
+    reduce what's on disk -- only a confirmed new result may remove what
+    it's superseding.
+    """
+    if status != "ok" and out_path.exists():
+        out_path.unlink()
+    for other_status in ("no_speech", "transcription_failed"):
+        if other_status == status:
+            continue
+        stale = out_dir / f"{stem}.{other_status}.md"
+        if stale.exists():
+            stale.unlink()
+
+
 def transcribe(mp4_path, out_path):
     """mlx-whisper large-v3. Returns a record; never raises.
 
@@ -289,23 +352,12 @@ def transcribe(mp4_path, out_path):
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = Path(mp4_path).stem
 
-    # A re-run can reach a different verdict than a previous run did for
-    # this same file (that's the point of the guards below). Clear whatever
-    # the previous verdict left behind so the archive never shows two
-    # contradictory outcomes side by side -- this run writes exactly one of
-    # these three back, whichever is correct now.
-    if out_path.exists():
-        out_path.unlink()
-    for other_status in ("no_speech", "transcription_failed"):
-        stale = out_dir / f"{stem}.{other_status}.md"
-        if stale.exists():
-            stale.unlink()
-
     try:
         silent = is_silent(probe_max_volume(mp4_path))
     except Exception:
         silent = False
     if silent:
+        _clear_superseded_artifacts(out_dir, stem, out_path, "no_speech")
         marker = write_status_marker(out_dir, stem, "no_speech", "silent audio track")
         return {"path": str(mp4_path), "status": "no_speech",
                 "reason": "silent audio track", "marker": str(marker)}
@@ -340,6 +392,7 @@ def transcribe(mp4_path, out_path):
     except Exception:
         degenerate = False
     if not degenerate:
+        _clear_superseded_artifacts(out_dir, stem, out_path, "ok")
         out_path.write_text(text)
         return {"path": str(mp4_path), "status": "ok", "transcript": str(out_path),
                 "source": "whisper"}
@@ -351,6 +404,7 @@ def transcribe(mp4_path, out_path):
 
     if prefix <= 0:
         reason = "no speech detected in audio"
+        _clear_superseded_artifacts(out_dir, stem, out_path, "no_speech")
         marker = write_status_marker(out_dir, stem, "no_speech", reason)
         return {"path": str(mp4_path), "status": "no_speech",
                 "reason": reason, "marker": str(marker)}
@@ -374,11 +428,13 @@ def transcribe(mp4_path, out_path):
             except Exception:
                 still_degenerate = True
             if not still_degenerate:
+                _clear_superseded_artifacts(out_dir, stem, out_path, "ok")
                 out_path.write_text(recovered_text)
                 return {"path": str(mp4_path), "status": "ok",
                         "transcript": str(out_path), "source": "whisper"}
 
     reason += "; retry with condition_on_previous_text=False did not recover"
+    _clear_superseded_artifacts(out_dir, stem, out_path, "transcription_failed")
     marker = write_status_marker(out_dir, stem, "transcription_failed", reason)
     return {"path": str(mp4_path), "status": "transcription_failed",
             "reason": reason, "marker": str(marker)}
