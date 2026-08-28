@@ -17,9 +17,9 @@ SKIP_NAMES = {".DS_Store"}
 
 def is_student_work(path):
     path = Path(path)
-    if fnmatch.fnmatch(path.name, constants.STUDENT_WORK_FILE_GLOB):
+    if fnmatch.fnmatch(path.name.lower(), constants.STUDENT_WORK_FILE_GLOB.lower()):
         return True
-    return any(fnmatch.fnmatch(part, constants.STUDENT_WORK_DIR_GLOB)
+    return any(fnmatch.fnmatch(part.lower(), constants.STUDENT_WORK_DIR_GLOB.lower())
                for part in path.parts)
 
 
@@ -40,7 +40,7 @@ def probe_duration(path):
              "-of", "csv=p=0", str(path)],
             capture_output=True, text=True, timeout=120)
         return float(result.stdout.strip())
-    except (ValueError, subprocess.SubprocessError):
+    except (ValueError, subprocess.SubprocessError, FileNotFoundError):
         return None
 
 
@@ -72,7 +72,8 @@ def index_screenflow_bundles(root):
     return [{"source": "screenflow", "path": str(p), "relpath": p.name,
              "size": sum(f.stat().st_size for f in p.rglob("*") if f.is_file()),
              "sha256": None, "duration": None, "ext": ".screenflow"}
-            for p in sorted(Path(root).rglob("*.screenflow"))]
+            for p in sorted(Path(root).rglob("*.screenflow"))
+            if not is_student_work(p)]
 
 
 def build_index():
