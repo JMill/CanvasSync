@@ -62,6 +62,21 @@ def run_stage(name, args):
         print(f"    {len(projects)} projects, {total} pages")
         return
 
+    if name == "vimeo":
+        import json
+
+        from si_archive import vimeo
+        from si_archive.net import Throttle
+        doc = json.loads((out / "_build" / "elucidat.json").read_text())
+        throttle = Throttle(min_gap=max(args.min_gap, 3.0), jitter=args.jitter,
+                            rest_every=args.rest_every)
+        records = vimeo.download_all(doc, out / "_build" / "vimeo", throttle)
+        (out / "_build" / "vimeo.json").write_text(
+            json.dumps(records, indent=2, ensure_ascii=False))
+        gaps = [r for r in records if r["status"] == "gap"]
+        print(f"    {len(records)} videos, {len(gaps)} gaps")
+        return
+
     raise NotImplementedError(f"stage {name!r} not yet implemented")
 
 
