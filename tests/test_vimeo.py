@@ -55,6 +55,27 @@ def test_ok_record_tolerates_a_missing_file():
     assert record["size"] is None
 
 
+def test_build_cmd_never_filters_the_format_selector_by_extension():
+    # Vimeo serves these as HLS with separate video-only/audio-only
+    # renditions whose audio extension is reported as mp4, not m4a. A
+    # selector filtering on ext=m4a or asking for a single-file `best`
+    # matches nothing and yt-dlp exits with "Requested format is not
+    # available" -- reconnaissance found this the hard way.
+    cmd = vimeo._build_cmd("https://player.vimeo.com/video/1", "/tmp/1.%(ext)s")
+    assert "m4a" not in " ".join(cmd)
+    assert "-f" in cmd
+    assert cmd[cmd.index("-f") + 1] == "bestvideo*+bestaudio/best"
+    assert "--merge-output-format" in cmd
+    assert "--impersonate" not in cmd
+
+
+def test_build_cmd_impersonate_adds_the_chrome_flag_without_dropping_others():
+    cmd = vimeo._build_cmd("https://player.vimeo.com/video/1", "/tmp/1.%(ext)s",
+                            impersonate=True)
+    assert cmd[cmd.index("--impersonate") + 1] == "chrome"
+    assert "-f" in cmd
+
+
 def test_gap_record_has_none_for_every_field_but_id_status_and_error():
     record = vimeo._gap_record("777331374", "blocked")
     assert record == {"id": "777331374", "status": "gap", "path": None,

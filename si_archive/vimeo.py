@@ -37,6 +37,29 @@ def collect_ids(elucidat_json):
     return [found[v] for v in order]
 
 
+def _build_cmd(url, template, impersonate=False):
+    """The yt-dlp invocation shared by the normal attempt and the retry.
+
+    Vimeo serves these as HLS with separate video-only and audio-only
+    renditions -- no single muxed format exists, and the audio rendition's
+    reported extension is mp4, not m4a. A format selector that filters on
+    ext=m4a or asks for a single-file `best` therefore matches nothing and
+    yt-dlp exits with "Requested format is not available." bestvideo*+bestaudio
+    is what yt-dlp falls back to by default when no -f is given at all, so
+    this is explicit rather than novel; --merge-output-format keeps the
+    ffmpeg-merged result a consistent .mp4 regardless of the source containers.
+    """
+    cmd = ["yt-dlp", "--no-warnings", "--no-playlist",
+           "--referer", constants.ELUCIDAT_REFERER,
+           "-f", "bestvideo*+bestaudio/best", "--merge-output-format", "mp4",
+           "--write-subs", "--sub-langs", "all", "--convert-subs", "srt",
+           "--print", "after_move:%(filepath)s|%(title)s|%(duration)s",
+           "-o", template, url]
+    if impersonate:
+        cmd = cmd[:1] + ["--impersonate", "chrome"] + cmd[1:]
+    return cmd
+
+
 def _run(cmd):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
 
@@ -74,17 +97,10 @@ def download(vid, vhash, out_dir):
     url = embed_url(vid, vhash)
     template = str(out_dir / f"{vid} - %(title)s.%(ext)s")
 
-    base = ["yt-dlp", "--no-warnings", "--no-playlist",
-            "--referer", constants.ELUCIDAT_REFERER,
-            "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-            "--write-subs", "--sub-langs", "all", "--convert-subs", "srt",
-            "--print", "after_move:%(filepath)s|%(title)s|%(duration)s",
-            "-o", template, url]
-
-    result = _run(base)
+    result = _run(_build_cmd(url, template))
     if result.returncode != 0 and "TLS fingerprint" in (result.stderr or ""):
         # Anti-bot fingerprinting; curl-cffi lets yt-dlp present a real browser TLS profile.
-        result = _run(base[:1] + ["--impersonate", "chrome"] + base[1:])
+        result = _run(_build_cmd(url, template, impersonate=True))
 
     if result.returncode != 0:
         return _gap_record(vid, (result.stderr or "").strip()[-500:])
