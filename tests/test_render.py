@@ -948,6 +948,24 @@ def test_clean_owned_output_removes_a_previous_run_but_not_build_or_source(tmp_p
     assert (tmp_path / "_source" / "keep.txt").exists()
 
 
+def test_clean_owned_output_removes_directories_a_superseded_version_wrote(tmp_path):
+    # Regression: an archive rendered by the version of this module that
+    # wrote unlinked-pages/unlinked-assessments/unlinked-assignments/
+    # unlinked-discussions/ as four separate top-level dirs (before they
+    # were folded into one unlinked/ tree) must not leave that content
+    # stranded once a newer version only owns "unlinked".
+    for legacy in ("unlinked-pages", "unlinked-assessments",
+                  "unlinked-assignments", "unlinked-discussions"):
+        (tmp_path / legacy).mkdir()
+        (tmp_path / legacy / "old.html").write_text("stale")
+
+    render.clean_owned_output(tmp_path)
+
+    for legacy in ("unlinked-pages", "unlinked-assessments",
+                  "unlinked-assignments", "unlinked-discussions"):
+        assert not (tmp_path / legacy).exists()
+
+
 def test_clean_owned_output_is_a_no_op_on_a_directory_that_does_not_exist_yet(tmp_path):
     render.clean_owned_output(tmp_path / "does-not-exist")  # must not raise
 

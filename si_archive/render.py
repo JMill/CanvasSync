@@ -936,8 +936,17 @@ def place_media(course, ledger, media_records, out_dir, build_dir=None):
 # output (a stray file left by a since-fixed bug, a renamed slug that
 # orphans its old filename) without ever touching _build/ or _source/, the
 # read-only stage inputs that also happen to live under out_dir.
+#
+# Includes names this module used to own but no longer does (the four
+# unlinked-<kind>/ directories a previous version of this module wrote,
+# before they were folded into one unlinked/ tree). Dropping a superseded
+# name here would leave its content stranded on any archive a prior version
+# already rendered -- the clean step exists specifically to prevent stale
+# output surviving a re-render, so it has to survive its own renames too.
 
-OWNED_TOP_LEVEL = ("sections", "orientation", "closing", "files", "unlinked")
+OWNED_TOP_LEVEL = ("sections", "orientation", "closing", "files", "unlinked",
+                   "unlinked-pages", "unlinked-assessments",
+                   "unlinked-assignments", "unlinked-discussions", "unlinked-quizzes")
 OWNED_ROOT_FILES = ("index.html", "question-banks.html", "MANIFEST.json", "reveal.css")
 
 
