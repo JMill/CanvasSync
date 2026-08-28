@@ -1,0 +1,38 @@
+/* Force every deferred Elucidat component into linear document flow.
+   Interactive e-learning hides content for pacing, not secrecy -- a modal is
+   a paragraph with a delay. Expanding it costs the pedagogy and keeps the idea. */
+
+.collapse, .collapsing, .accordion-body, .accordion-collapse,
+.tab-pane, .carousel-item, .modal, .modal-dialog, .modal-content,
+.e-hidden, .hidden, [aria-hidden="true"] {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    position: static !important;
+    transform: none !important;
+}
+
+/* Carousels stack instead of overlapping. */
+.carousel-inner, .carousel { height: auto !important; }
+.carousel-item { float: none !important; margin-bottom: 1.5rem; }
+
+/* Modals become inline blocks, not overlays. */
+.modal {
+    background: transparent !important;
+    z-index: auto !important;
+    border: 1px solid #d8d8d8;
+    margin: 1.5rem 0;
+    padding: 1rem;
+}
+.modal-backdrop { display: none !important; }
+
+/* Player chrome that means nothing offline. */
+.project__header, .project__footer, .toolbar, .progress_bar,
+.pager, .menu__body { display: none !important; }
+
+/* Anything the reveal rules expanded gets a readable width. */
+body { max-width: 60rem; margin: 0 auto; padding: 2rem 1.5rem; }
+img, video { max-width: 100%; height: auto; }
