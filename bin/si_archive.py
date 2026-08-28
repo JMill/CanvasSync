@@ -123,6 +123,13 @@ def run_stage(name, args):
               f"{stats['links_fixed']} cross-reference links resolved")
         return
 
+    if name == "verify":
+        from si_archive import verify
+        report = verify.build_report(out)
+        (out / "REPORT.md").write_text(report)
+        print(report)
+        return
+
     raise NotImplementedError(f"stage {name!r} not yet implemented")
 
 
