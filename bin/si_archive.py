@@ -77,6 +77,18 @@ def run_stage(name, args):
         print(f"    {len(records)} videos, {len(gaps)} gaps")
         return
 
+    if name == "local":
+        import json
+
+        from si_archive import localsrc
+        records = localsrc.build_index()
+        target = out / "_build" / "local.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(records, indent=2, ensure_ascii=False))
+        mp4 = [r for r in records if r["ext"] == ".mp4"]
+        print(f"    {len(records)} files, {len(mp4)} mp4")
+        return
+
     raise NotImplementedError(f"stage {name!r} not yet implemented")
 
 
