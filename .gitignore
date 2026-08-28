@@ -6,3 +6,5 @@ dist
 *.pyc
 .venv
 .playwright-mcp
+.claude/worktrees
+.superpowers
