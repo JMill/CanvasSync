@@ -289,6 +289,18 @@ def transcribe(mp4_path, out_path):
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = Path(mp4_path).stem
 
+    # A re-run can reach a different verdict than a previous run did for
+    # this same file (that's the point of the guards below). Clear whatever
+    # the previous verdict left behind so the archive never shows two
+    # contradictory outcomes side by side -- this run writes exactly one of
+    # these three back, whichever is correct now.
+    if out_path.exists():
+        out_path.unlink()
+    for other_status in ("no_speech", "transcription_failed"):
+        stale = out_dir / f"{stem}.{other_status}.md"
+        if stale.exists():
+            stale.unlink()
+
     try:
         silent = is_silent(probe_max_volume(mp4_path))
     except Exception:

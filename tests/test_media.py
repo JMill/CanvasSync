@@ -271,6 +271,49 @@ def test_find_existing_srt_does_not_match_an_unrelated_short_stem(tmp_path):
     assert media.find_existing_srt(tmp_path, "MIT_INN_M1_V1") is None
 
 
+def test_transcribe_clears_a_stale_marker_left_by_a_previous_run_with_a_different_verdict(tmp_path):
+    """A rerun that now succeeds must not leave a contradictory "no speech
+    detected" marker from a previous run's different (wrong) verdict sitting
+    next to the fresh transcript.
+    """
+    mp4 = tmp_path / "webinar.mp4"
+    out = tmp_path / "webinar.transcript.md"
+    stale_marker = tmp_path / "webinar.no_speech.md"
+    stale_marker.write_text("No speech detected in this video's audio track: silent audio track.\n")
+
+    def fake_run(cmd, **kwargs):
+        if "volumedetect" in cmd:
+            return MagicMock(stderr="max_volume: -0.5 dB\n")
+        (tmp_path / "webinar.srt").write_text(_srt_from_sentences(REALISTIC_TRANSCRIPT))
+        return MagicMock(returncode=0, stderr="", stdout="")
+
+    with patch.object(media.subprocess, "run", side_effect=fake_run):
+        result = media.transcribe(str(mp4), out)
+
+    assert result["status"] == "ok"
+    assert out.exists()
+    assert not stale_marker.exists()
+
+
+def test_transcribe_clears_a_stale_transcript_left_by_a_previous_run_with_a_different_verdict(tmp_path):
+    """The inverse: a rerun that now fails must not leave a stale "ok"
+    transcript.md (from a previous, less careful run) looking legitimate
+    next to the fresh failure marker.
+    """
+    mp4 = tmp_path / "webinar.mp4"
+    out = tmp_path / "webinar.transcript.md"
+    out.write_text("This looks like a legitimate transcript but isn't anymore.\n")
+
+    def fake_run(cmd, **kwargs):
+        return MagicMock(stderr="max_volume: -91.0 dB\n")  # silent
+
+    with patch.object(media.subprocess, "run", side_effect=fake_run):
+        result = media.transcribe(str(mp4), out)
+
+    assert result["status"] == "no_speech"
+    assert not out.exists()
+
+
 # --- Third degeneracy rule: type-token ratio (phrase-loop hallucination) ---
 
 
