@@ -6,13 +6,28 @@ converted to the same markdown shape so the site presents one artifact type
 regardless of where the text came from.
 
 Whisper has no failure mode for "nothing to transcribe" -- given silence or
-music it emits a fluent, plausible, entirely fabricated continuation. Two
-guards catch this before a hallucination reaches the archive as a transcript:
-a pre-transcription silence probe (`probe_max_volume` / `is_silent`), and a
-post-transcription degeneracy screen (`is_degenerate_transcript`) for cases
-like music-only audio where the track isn't silent but carries no speech.
-Both are recorded as `status: "no_speech"` with an honest marker file in
-place of a `.transcript.md` -- never silence, never a fabricated transcript.
+music it emits a fluent, plausible, entirely fabricated continuation, and on
+long audio it can also drop into a repetition-loop bug partway through a
+real recording. Two guards catch this before a hallucination reaches the
+archive as a transcript: a pre-transcription silence probe (`probe_max_volume`
+/ `is_silent`), and a post-transcription degeneracy screen
+(`is_degenerate_transcript`) for everything else -- music-only audio, and
+long-audio repetition loops.
+
+A degenerate transcript still needs to say something different depending on
+*why* it's degenerate:
+
+  - `status: "no_speech"` -- the audio genuinely has nothing to transcribe
+    (silence, or music with no speech in it).
+  - `status: "transcription_failed"` -- real speech is present
+    (`healthy_prefix_seconds` finds a genuine, non-degenerate prefix) but
+    Whisper's transcription of it broke down partway through. One recovery
+    attempt is made with `--condition-on-previous-text False`, the standard
+    mitigation for this failure mode; if that also degenerates, the failure
+    is recorded rather than retried further.
+
+Either non-`"ok"` status gets an honest marker file in place of a
+`.transcript.md` -- never silence, never a fabricated transcript.
 """
 import re
 import subprocess
@@ -38,8 +53,21 @@ SILENCE_MAX_VOLUME_DB = -50.0
 # margin against the real data.
 DEGENERATE_TOP_WORD_SHARE = 0.30
 DEGENERATE_MIN_UNIQUE_WORDS = 25
+# A repetition loop can also cycle through a short *phrase* rather than a
+# single word ("I'm a graduate student at MIT." over and over) -- that keeps
+# unique-word count and top-word share inside the two thresholds above while
+# the type-token ratio collapses (one real webinar measured 110 unique words
+# across 48,933 total: 0.22%, against 5.7-36% on healthy transcripts). Only
+# meaningful past a couple hundred words, where the ratio stops being noisy.
+DEGENERATE_MIN_TYPE_TOKEN_RATIO = 0.02
+DEGENERATE_TYPE_TOKEN_RATIO_MIN_WORDS = 200
+
+# For splitting "no speech" from "speech Whisper failed to transcribe":
+# chunk the transcript into windows this wide and screen each on its own.
+HEALTHY_PREFIX_CHUNK_SECONDS = 15.0
 
 WORD_RE = re.compile(r"[a-z']+")
+CUE_TIME_RE = re.compile(r"^(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->")
 
 
 def srt_to_markdown(srt_text):
@@ -84,24 +112,92 @@ def is_silent(max_volume_db):
 
 
 def is_degenerate_transcript(text):
-    """Flag Whisper hallucination on non-speech audio: a handful of words
+    """Flag Whisper hallucination: a handful of words or a short phrase
     looping rather than real prose.
     """
     words = WORD_RE.findall(text.lower())
     if not words:
         return True
     counts = Counter(words)
-    top_share = counts.most_common(1)[0][1] / len(words)
-    return top_share > DEGENERATE_TOP_WORD_SHARE or len(counts) < DEGENERATE_MIN_UNIQUE_WORDS
+    total = len(words)
+    unique = len(counts)
+    top_share = counts.most_common(1)[0][1] / total
+    if top_share > DEGENERATE_TOP_WORD_SHARE or unique < DEGENERATE_MIN_UNIQUE_WORDS:
+        return True
+    if (total > DEGENERATE_TYPE_TOKEN_RATIO_MIN_WORDS
+            and (unique / total) < DEGENERATE_MIN_TYPE_TOKEN_RATIO):
+        return True
+    return False
 
 
-def write_no_speech_marker(out_dir, stem, reason):
-    """A short, honest marker in place of a transcript -- never a degenerate
-    `.transcript.md`, and never silence either.
+def _parse_srt_cues(srt_text):
+    """(start_seconds, text) per cue, in chronological order. Only used by
+    `healthy_prefix_seconds` below -- `srt_to_markdown` has its own simpler
+    pass since it doesn't need timing.
     """
-    marker = Path(out_dir) / f"{stem}.no_speech.md"
+    cues = []
+    start = None
+    buf = []
+    for raw in srt_text.splitlines():
+        line = raw.strip()
+        match = CUE_TIME_RE.match(line)
+        if match:
+            if start is not None:
+                cues.append((start, " ".join(buf)))
+            hours, minutes, seconds, millis = (int(g) for g in match.groups())
+            start = hours * 3600 + minutes * 60 + seconds + millis / 1000
+            buf = []
+        elif line and not line.isdigit():
+            buf.append(line)
+    if start is not None:
+        cues.append((start, " ".join(buf)))
+    return cues
+
+
+def healthy_prefix_seconds(srt_text, chunk_seconds=HEALTHY_PREFIX_CHUNK_SECONDS):
+    """How much of the transcript, from the start, precedes a sustained
+    degenerate loop -- the signal that separates a real recording whose
+    transcription broke down partway through from audio that never had any
+    speech to transcribe in the first place.
+
+    Chunks the transcript into fixed time windows and scans backward from
+    the end for the last window that is not degenerate on its own; every
+    window after it was already found degenerate on the way there. Returns
+    0.0 if even the first chunk looks degenerate -- i.e. the transcript
+    never has a moment of real content (music-only audio, for example).
+    """
+    cues = _parse_srt_cues(srt_text)
+    if not cues:
+        return 0.0
+    chunks = []
+    current = []
+    boundary = chunk_seconds
+    for start, text in cues:
+        while start >= boundary:
+            chunks.append(current)
+            current = []
+            boundary += chunk_seconds
+        current.append(text)
+    if current:
+        chunks.append(current)
+    for index in range(len(chunks) - 1, -1, -1):
+        if not is_degenerate_transcript(" ".join(chunks[index])):
+            return (index + 1) * chunk_seconds
+    return 0.0
+
+
+def write_status_marker(out_dir, stem, status, reason):
+    """A short, honest marker in place of a transcript for anything that
+    isn't a clean "ok" -- never a degenerate `.transcript.md`, and never
+    silence or a fabricated transcript passed off as nothing either.
+    """
+    headline = {
+        "no_speech": "No speech detected in this video's audio track",
+        "transcription_failed": "Transcription failed for this video",
+    }[status]
+    marker = Path(out_dir) / f"{stem}.{status}.md"
     marker.write_text(
-        f"No speech detected in this video's audio track: {reason}.\n"
+        f"{headline}: {reason}.\n"
         "No transcript was produced. See media.json for details.\n")
     return marker
 
@@ -149,13 +245,44 @@ def find_produced_srt(out_dir, stem, before):
     return guess if guess.exists() else None
 
 
+def _attempt_recovery(mp4_path, out_dir, stem, produced):
+    """One retry with `--condition-on-previous-text False` -- the standard
+    mitigation for mlx-whisper's known repetition-loop failure on long
+    audio. Never raises; returns the new SRT's Path on a clean subprocess
+    run, else None.
+
+    The failed first attempt is preserved under a distinguishing name
+    rather than overwritten, so a second failure doesn't erase the
+    evidence of the first -- destroy nothing, even a failed transcript.
+    """
+    preserved = produced.with_name(produced.stem + ".failed-attempt.srt")
+    if produced.exists() and not preserved.exists():
+        produced.replace(preserved)
+    before = set(Path(out_dir).glob("*.srt"))
+    try:
+        result = subprocess.run(
+            [WHISPER_BIN, "--model", WHISPER_MODEL,
+             "--output-format", "srt", "--output-dir", str(out_dir),
+             "--condition-on-previous-text", "False", str(mp4_path)],
+            capture_output=True, text=True, timeout=7200)
+    except subprocess.SubprocessError:
+        return None
+    if result.returncode != 0:
+        return None
+    return find_produced_srt(out_dir, stem, before)
+
+
 def transcribe(mp4_path, out_path):
     """mlx-whisper large-v3. Returns a record; never raises.
 
-    Guards against Whisper hallucination on non-speech audio: a silence probe
-    before transcribing (skips Whisper entirely), and a degeneracy screen on
-    the resulting text after. Either can turn a transcription attempt into a
-    `status: "no_speech"` record instead of `"ok"`.
+    Guards against Whisper hallucination: a silence probe before
+    transcribing (skips Whisper entirely for digitally silent audio), and a
+    degeneracy screen on the resulting text after. A degenerate result with
+    no genuine prefix (`healthy_prefix_seconds` == 0) means the audio never
+    had speech to transcribe -- `status: "no_speech"`. A degenerate result
+    with a genuine prefix means real speech broke Whisper partway through;
+    one recovery attempt is made before giving up with
+    `status: "transcription_failed"`.
     """
     out_path = Path(out_path)
     out_dir = out_path.parent
@@ -167,7 +294,7 @@ def transcribe(mp4_path, out_path):
     except Exception:
         silent = False
     if silent:
-        marker = write_no_speech_marker(out_dir, stem, "silent audio track")
+        marker = write_status_marker(out_dir, stem, "no_speech", "silent audio track")
         return {"path": str(mp4_path), "status": "no_speech",
                 "reason": "silent audio track", "marker": str(marker)}
 
@@ -191,22 +318,58 @@ def transcribe(mp4_path, out_path):
                     "error": "mlx_whisper produced no srt"}
 
     try:
-        text = srt_to_markdown(produced.read_text(encoding="utf-8", errors="replace"))
+        raw = produced.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         return {"path": str(mp4_path), "status": "gap", "error": str(exc)}
+    text = srt_to_markdown(raw)
 
     try:
         degenerate = is_degenerate_transcript(text)
     except Exception:
         degenerate = False
-    if degenerate:
-        marker = write_no_speech_marker(out_dir, stem, "no speech detected in audio")
-        return {"path": str(mp4_path), "status": "no_speech",
-                "reason": "no speech detected in audio", "marker": str(marker)}
+    if not degenerate:
+        out_path.write_text(text)
+        return {"path": str(mp4_path), "status": "ok", "transcript": str(out_path),
+                "source": "whisper"}
 
-    out_path.write_text(text)
-    return {"path": str(mp4_path), "status": "ok", "transcript": str(out_path),
-            "source": "whisper"}
+    try:
+        prefix = healthy_prefix_seconds(raw)
+    except Exception:
+        prefix = 0.0
+
+    if prefix <= 0:
+        reason = "no speech detected in audio"
+        marker = write_status_marker(out_dir, stem, "no_speech", reason)
+        return {"path": str(mp4_path), "status": "no_speech",
+                "reason": reason, "marker": str(marker)}
+
+    # Real speech is present but the transcription degenerated into a
+    # repetition loop -- try the standard mitigation once before giving up.
+    reason = f"repetition loop after ~{int(prefix)}s of valid speech"
+    try:
+        recovered = _attempt_recovery(mp4_path, out_dir, stem, produced)
+    except Exception:
+        recovered = None
+    if recovered is not None:
+        try:
+            recovered_text = srt_to_markdown(
+                recovered.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            recovered_text = None
+        if recovered_text is not None:
+            try:
+                still_degenerate = is_degenerate_transcript(recovered_text)
+            except Exception:
+                still_degenerate = True
+            if not still_degenerate:
+                out_path.write_text(recovered_text)
+                return {"path": str(mp4_path), "status": "ok",
+                        "transcript": str(out_path), "source": "whisper"}
+
+    reason += "; retry with condition_on_previous_text=False did not recover"
+    marker = write_status_marker(out_dir, stem, "transcription_failed", reason)
+    return {"path": str(mp4_path), "status": "transcription_failed",
+            "reason": reason, "marker": str(marker)}
 
 
 def contact_sheet(mp4_path, out_path, duration):
