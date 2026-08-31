@@ -92,6 +92,45 @@ class Archiver:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
+    def save_json_merged(self, relpath, data, key="id"):
+        """Save a list endpoint without losing records that vanished upstream.
+
+        Canvas removes things: an announcement is deleted, an assignment is
+        unpublished. A plain overwrite would drop the only record the archive
+        has of them -- the rendered HTML survives (it is named per id) while
+        the API payload silently loses the metadata. Seen with AI 574's
+        "Welcome to Lesson 1" announcement, which disappeared between runs.
+
+        Records present before but absent now are kept and flagged rather than
+        deleted, so the archive can always say what it once held.
+        """
+        p = self.out / relpath
+        if not isinstance(data, list):
+            return self.save_json(relpath, data)
+        previous = []
+        if p.exists():
+            try:
+                loaded = json.loads(p.read_text())
+                previous = loaded if isinstance(loaded, list) else []
+            except (ValueError, OSError):
+                previous = []
+        live = {r[key]: r for r in data if isinstance(r, dict) and key in r}
+        merged = list(data)
+        vanished = 0
+        for rec in previous:
+            if not isinstance(rec, dict) or key not in rec or rec[key] in live:
+                continue
+            rec = dict(rec)
+            rec.setdefault("_archived_last_seen", rec.get("_archived_last_seen")
+                           or datetime.now(timezone.utc).isoformat())
+            rec["_archived_no_longer_live"] = True
+            merged.append(rec)
+            vanished += 1
+        if vanished:
+            print(f"    ({vanished} record(s) no longer live upstream, kept and flagged)")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(merged, indent=2, ensure_ascii=False))
+
     def save_html(self, relpath, title, body, source_url, extra_meta=""):
         p = self.out / relpath
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -144,7 +183,7 @@ class Archiver:
                 m["items"] = self.try_api(f"module {m['id']} items",
                                           f"courses/{self.cid}/modules/{m['id']}/items",
                                           {"include[]": "content_details"}) or []
-        self.save_json("_api/modules.json", mods)
+        self.save_json_merged("_api/modules.json", mods)
         self.counts["modules"] = len(mods)
 
         rows = []
@@ -169,7 +208,7 @@ class Archiver:
             pages = [{"url": u} for u in urls]
             print(f"    (pages index hidden; using {len(pages)} pages from modules)")
         else:
-            self.save_json("_api/pages.json", pages)
+            self.save_json_merged("_api/pages.json", pages)
         self.counts["pages"] = len(pages)
         for p in pages:
             full = self.try_api(f"page {p['url']}", f"courses/{self.cid}/pages/{p['url']}")
@@ -191,7 +230,7 @@ class Archiver:
                             {"include[]": ["submission", "rubric"]})
         if asgs is None:
             return
-        self.save_json("_api/assignments.json", asgs)
+        self.save_json_merged("_api/assignments.json", asgs)
         self.counts["assignments"] = len(asgs)
         for a in asgs:
             meta = f" &middot; due: {a.get('due_at') or 'n/a'} &middot; points: {a.get('points_possible')}"
@@ -211,7 +250,7 @@ class Archiver:
             return
         if not announcements:
             topics = [t for t in topics if not t.get("is_announcement")]
-        self.save_json(f"_api/{label}.json", topics)
+        self.save_json_merged(f"_api/{label}.json", topics)
         self.counts[label] = len(topics)
         for t in topics:
             body = [t.get("message") or ""]
@@ -246,7 +285,7 @@ class Archiver:
         quizzes = self.try_api("quizzes", f"courses/{self.cid}/quizzes")
         if quizzes is None:
             return
-        self.save_json("_api/quizzes.json", quizzes)
+        self.save_json_merged("_api/quizzes.json", quizzes)
         self.counts["quizzes"] = len(quizzes)
         for q in quizzes:
             meta = f" &middot; due: {q.get('due_at') or 'n/a'} &middot; points: {q.get('points_possible')}"
@@ -266,7 +305,7 @@ class Archiver:
         if extra:
             print(f"    (+{len(extra)} file(s) absent from the index, found via modules + embedded links)")
         files = indexed + extra
-        self.save_json("_api/files.json", files)
+        self.save_json_merged("_api/files.json", files)
         self.save_json("_api/folders.json", folders or [])
         folder_path = {}
         for f in folders or []:
