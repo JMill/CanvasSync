@@ -5,6 +5,7 @@ Fork of perslev/CanvasSync — Python CLI that syncs Canvas LMS courses to disk 
 ## What this fork adds
 
 - Env-var config for non-interactive, multi-instance use (commit `64438db`): vars in `CanvasSync/settings/settings.py` and `cryptography.py`.
+- `bin/canvas_login.py`: drives a real Chrome window through the PSU/Duo login and dumps the session cookies as JSON. Keeps its own profile at `~/.cache/canvas-archive-profile`, so after the first Duo approval later runs find the session already live and exit immediately.
 - `bin/canvas_browser_archive.py`: archives a course using a logged-in browser session's cookies, for institutions like PSU that disable personal API tokens. Wrapped by `~/bin/canvas-archive`.
 - `bin/canvas_unlock_walk.py`: opens up prerequisite-chained courses by walking module items in order the way clicking "Next" does, fulfilling `must_view` requirements so the archiver can see the content. Run it *before* archiving.
 - `bin/canvas_media_archive.py`: embedded video is a dead iframe in the archive; this pulls transcripts, contact sheets and (optionally) MP4s for Kaltura, Canvas-native, YouTube and Vimeo embeds. Run it *after* archiving.
@@ -12,7 +13,7 @@ Fork of perslev/CanvasSync — Python CLI that syncs Canvas LMS courses to disk 
 
 ## Workflows on this machine
 
-- **PSU archives** (API tokens disabled by PSU): Playwright login to psu.instructure.com → dump cookies to JSON → `canvas_unlock_walk.py` for prereq-chained courses → `~/bin/canvas-archive <cookies.json>`. Incremental; re-run as modules unlock.
+- **PSU archives** (API tokens disabled by PSU): `canvas_login.py --out <scratch>/cookies.json` → `canvas_unlock_walk.py --dry-run` for prereq-chained courses → `~/bin/canvas-archive <cookies.json>`. Incremental; re-run as modules unlock.
 - **Emeritus backup** (API works): `~/bin/canvassync-emeritus`.
 - Interpreter: `.venv/bin/python` (repo is `pip install -e`'d into it, so local edits are live).
 
