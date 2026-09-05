@@ -301,10 +301,17 @@ class Archiver:
             indexed = []
         # A successful index is not a complete one: Canvas omits files flagged
         # hidden, though they stay reachable by id. Always union the two sources.
-        extra = self._files_from_references(known={f["id"] for f in indexed})
+        # Attachments posted in discussion replies are never course files, so
+        # they must come from the topic views rather than the files API.
+        attach = [a for a in self._attachments_from_views()
+                  if a["id"] not in {f["id"] for f in indexed}]
+        if attach:
+            print(f"    (+{len(attach)} reply attachment(s) taken from discussion views)")
+        extra = self._files_from_references(
+            known={f["id"] for f in indexed} | {a["id"] for a in attach})
         if extra:
             print(f"    (+{len(extra)} file(s) absent from the index, found via modules + embedded links)")
-        files = indexed + extra
+        files = indexed + extra + attach
         self.save_json_merged("_api/files.json", files)
         self.save_json("_api/folders.json", folders or [])
         folder_path = {}
@@ -315,7 +322,11 @@ class Archiver:
         state = json.loads(state_file.read_text()) if state_file.exists() else {}
         downloaded = skipped = failed = 0
         for f in files:
-            rel = Path("files") / folder_path.get(f.get("folder_id"), "") / f["display_name"]
+            # Reply attachments have no folder_id and their display names are
+            # whatever a classmate uploaded, so keep them out of the course tree.
+            sub_dir = ("_discussion_attachments" if f.get("_reply_attachment")
+                       else folder_path.get(f.get("folder_id"), ""))
+            rel = Path("files") / sub_dir / f["display_name"]
             key = str(f["id"])
             sig = f"{f.get('size')}|{f.get('updated_at')}"
             dest = self.out / rel
@@ -344,6 +355,44 @@ class Archiver:
         state_file.write_text(json.dumps(state, indent=2))
         self.counts["files"] = len(files)
         print(f"  files: {len(files)} ({downloaded} downloaded, {skipped} unchanged, {failed} failed)")
+
+    def _attachments_from_views(self):
+        """Collect files attached to discussion and announcement replies.
+
+        These are not course files: /courses/<cid>/files/<id> 404s for every one
+        of them, so _files_from_references can see their ids in the saved HTML
+        and still never resolve them. The topic view JSON already carries each
+        attachment's metadata plus a verifier-signed download URL, which works
+        with the session cookie -- so take the record from there.
+        """
+        def walk(entries):
+            for e in entries or []:
+                yield e
+                yield from walk(e.get("replies"))
+
+        found = {}
+        for sub in ("announcements", "discussions"):
+            d = self.out / "_api" / sub
+            if not d.exists():
+                continue
+            for p in sorted(d.glob("*_view.json")):
+                try:
+                    view = json.loads(p.read_text())
+                except (OSError, ValueError) as e:
+                    self.errors.append(f"attachments from {p.name}: {e}")
+                    continue
+                for entry in walk(view.get("view")):
+                    for a in (entry.get("attachments") or []):
+                        # Without a verifier URL there is no way to fetch it.
+                        if not a.get("id") or not a.get("url"):
+                            continue
+                        rec = dict(a)
+                        rec.setdefault("display_name", a.get("filename") or str(a["id"]))
+                        if not rec.get("updated_at"):
+                            rec["updated_at"] = a.get("created_at")
+                        rec["_reply_attachment"] = True
+                        found[a["id"]] = rec
+        return list(found.values())
 
     def _files_from_references(self, known=()):
         """Collect file ids from module items and from /files/<id> links embedded in
