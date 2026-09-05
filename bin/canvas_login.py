@@ -6,8 +6,11 @@ real browser session's cookies. This script produces that cookie dump.
 
 It drives Chrome with a profile owned by this repo (not the shared
 playwright-mcp profiles, which any other tool may hold a lock on). The profile
-persists, so a Duo login is usually only needed the first time or after the
-session expires -- later runs find the session already live and exit at once.
+persists, but a Canvas login does NOT survive it: `canvas_session` is a
+non-persistent cookie, which Chrome drops when the browser exits. Every run
+therefore starts unauthenticated and needs a fresh Duo approval -- verified by
+launching the profile cold and getting 401 unauthenticated with no Canvas
+cookies restored. Budget for a human being present; unattended runs time out.
 
 Usage:
     canvas_login.py --out /path/to/cookies.json
@@ -19,6 +22,7 @@ Keep the output in a scratch dir: it contains `canvas_session`.
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -42,6 +46,33 @@ def logged_in(request, base):
     return data.get("name") or data.get("id")
 
 
+def write_cookie_dump(path, cookies):
+    """Write the cookie JSON to `path`, owner-readable from the first byte.
+
+    The dump contains `canvas_session`. Creating the file at the umask default
+    and chmod-ing afterwards leaves a window in which it is world-readable, and
+    if the path already exists with wider bits the cookies sit exposed for the
+    whole write. So open with 0600 and fchmod before any content lands -- the
+    fchmod is what covers the pre-existing file, since O_CREAT's mode applies
+    only to a file the call actually creates.
+    """
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        fh = os.fdopen(fd, "w")
+    except BaseException:
+        # Only the raw fd is ours to close here. Once fdopen returns, the file
+        # object owns it and closing it again could shut an unrelated fd that
+        # has since been handed out under the same number.
+        os.close(fd)
+        raise
+    with fh:
+        json.dump(cookies, fh, indent=2)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="https://psu.instructure.com")
@@ -53,7 +84,11 @@ def main():
     args = ap.parse_args()
 
     base = args.base.rstrip("/")
-    Path(args.profile).mkdir(parents=True, exist_ok=True)
+    # The profile holds a live Canvas session in Chrome's own cookie store,
+    # so keep it owner-only; exist_ok skips the mode on an existing dir.
+    profile = Path(args.profile)
+    profile.mkdir(parents=True, exist_ok=True, mode=0o700)
+    profile.chmod(0o700)
 
     with sync_playwright() as pw:
         ctx = pw.chromium.launch_persistent_context(
@@ -85,10 +120,7 @@ def main():
         cookies = [{"name": c["name"], "value": c["value"],
                     "domain": c["domain"], "path": c.get("path", "/")}
                    for c in ctx.cookies()]
-        out = Path(args.out)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(cookies, indent=2))
-        out.chmod(0o600)
+        out = write_cookie_dump(args.out, cookies)
         names = {c["name"] for c in cookies}
         print(f"wrote {len(cookies)} cookies -> {out}"
               f"  (canvas_session: {'yes' if 'canvas_session' in names else 'NO'})")

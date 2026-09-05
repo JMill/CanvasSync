@@ -5,7 +5,7 @@ Fork of perslev/CanvasSync — Python CLI that syncs Canvas LMS courses to disk 
 ## What this fork adds
 
 - Env-var config for non-interactive, multi-instance use (commit `64438db`): vars in `CanvasSync/settings/settings.py` and `cryptography.py`.
-- `bin/canvas_login.py`: drives a real Chrome window through the PSU/Duo login and dumps the session cookies as JSON. Keeps its own profile at `~/.cache/canvas-archive-profile`, so after the first Duo approval later runs find the session already live and exit immediately.
+- `bin/canvas_login.py`: drives a real Chrome window through the PSU/Duo login and dumps the session cookies as JSON (written `0600` from the first byte — it contains `canvas_session`). Uses its own Chrome profile at `~/.cache/canvas-archive-profile` rather than the shared playwright-mcp ones, which another tool may hold a lock on.
 - `bin/canvas_browser_archive.py`: archives a course using a logged-in browser session's cookies, for institutions like PSU that disable personal API tokens. Wrapped by `~/bin/canvas-archive`.
 - `bin/canvas_unlock_walk.py`: opens up prerequisite-chained courses by walking module items in order the way clicking "Next" does, fulfilling `must_view` requirements so the archiver can see the content. Run it *before* archiving.
 - `bin/canvas_media_archive.py`: embedded video is a dead iframe in the archive; this pulls transcripts, contact sheets and (optionally) MP4s for Kaltura, Canvas-native, YouTube and Vimeo embeds. Run it *after* archiving.
@@ -21,6 +21,7 @@ Fork of perslev/CanvasSync — Python CLI that syncs Canvas LMS courses to disk 
 
 - Instance isolation needs BOTH `CANVASSYNC_SETTINGS_PATH` and `CANVASSYNC_PW_PATH` set per wrapper; missing either silently breaks the other instance's settings decryption (PKCS#7 padding error).
 - Cookie dumps contain `canvas_session` — keep them in scratch dirs, never in the repo or Dropbox.
+- A Duo login does **not** survive between runs, and no Chrome profile will change that: `canvas_session` is a non-persistent cookie, so Chrome drops it when the browser exits. Launching the saved profile cold returns `401 unauthenticated` with zero Canvas cookies restored. Every archiving session needs a human to approve Duo once, up front — unattended or scheduled runs just time out at `--timeout` and exit 1.
 - Two different gates look alike but aren't: date-locked modules (AI 574) just wait for a date, while prerequisite-chained ones (ENGR 820) unlock only as requirements are met. `canvas_unlock_walk.py` helps with the second and correctly does nothing for the first.
 - Files attached to discussion/announcement *replies* are not course files: `/courses/<cid>/files/<id>` 404s for every one, so scraping ids out of archived HTML never resolves them. The topic-view JSON carries the metadata plus a verifier-signed URL that works with the session cookie — that is the only way in. They land under `files/_discussion_attachments/`, kept out of the course tree since they have no `folder_id` and classmate-chosen names.
 - The walker fulfils `must_view` only. `must_submit`/`must_contribute` requirements are real coursework — it reports them as walls and stops rather than submitting anything.
