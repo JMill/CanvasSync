@@ -6,6 +6,8 @@ the secret is on disk; these tests pin the invariant that closed that window.
 import json
 import os
 import stat
+import sys
+import time
 
 import pytest
 
@@ -83,3 +85,74 @@ def test_parent_directory_is_created(tmp_path):
     out = canvas_login.write_cookie_dump(tmp_path / "nested" / "d" / "c.json", COOKIES)
 
     assert out.exists() and mode_of(out) == 0o600
+
+
+# --- reusable session store -------------------------------------------------
+# canvas_session is dropped by Chrome on exit, so the login cannot be reused via
+# the profile. These cover keeping our own copy: it must round-trip, stay
+# owner-only, and refuse to hand back anything stale or unreadable rather than
+# letting the caller present a dead cookie as a live session.
+
+def test_saved_session_round_trips(tmp_path):
+    store = tmp_path / "session.json"
+
+    canvas_login.save_session(store, COOKIES)
+
+    assert canvas_login.load_session(store, max_age_hours=24) == COOKIES
+
+
+def test_saved_session_is_owner_only(tmp_path):
+    store = tmp_path / "session.json"
+
+    canvas_login.save_session(store, COOKIES)
+
+    assert mode_of(store) == 0o600
+
+
+def test_missing_store_returns_none(tmp_path):
+    assert canvas_login.load_session(tmp_path / "absent.json", max_age_hours=24) is None
+
+
+def test_store_older_than_max_age_is_ignored_and_deleted(tmp_path):
+    store = tmp_path / "session.json"
+    store.write_text(json.dumps({"saved_at": time.time() - 25 * 3600, "cookies": COOKIES}))
+
+    assert canvas_login.load_session(store, max_age_hours=24) is None
+    assert not store.exists(), "a session too old to use must not be left on disk"
+
+
+def test_store_within_max_age_is_returned(tmp_path):
+    store = tmp_path / "session.json"
+    store.write_text(json.dumps({"saved_at": time.time() - 23 * 3600, "cookies": COOKIES}))
+
+    assert canvas_login.load_session(store, max_age_hours=24) == COOKIES
+
+
+def test_unreadable_store_returns_none_instead_of_crashing_the_login(tmp_path):
+    store = tmp_path / "session.json"
+    store.write_text("{ this is not json")
+
+    assert canvas_login.load_session(store, max_age_hours=24) is None
+    assert not store.exists()
+
+
+def test_forget_removes_the_store_and_tolerates_a_missing_one(tmp_path):
+    store = tmp_path / "session.json"
+    canvas_login.save_session(store, COOKIES)
+
+    canvas_login.forget_session(store)
+    assert not store.exists()
+
+    canvas_login.forget_session(store)  # must not raise
+
+
+def test_forget_does_not_require_an_output_path(tmp_path, monkeypatch, capsys):
+    """--forget is housekeeping: it never dumps cookies, so --out is irrelevant."""
+    store = tmp_path / "session.json"
+    canvas_login.save_session(store, COOKIES)
+    monkeypatch.setattr(sys, "argv",
+                        ["canvas_login.py", "--forget", "--session-store", str(store)])
+
+    assert canvas_login.main() == 0
+    assert not store.exists()
+    capsys.readouterr()
