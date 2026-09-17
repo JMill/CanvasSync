@@ -8,8 +8,18 @@ is, and pulls down what that provider will give us:
     Kaltura (MediaSpace)  transcript (SRT + plain text), contact sheet, MP4
     Canvas native media   transcript via media_tracks, MP4
     YouTube               transcript + thumbnail via yt-dlp, MP4
-    Vimeo                 whatever yt-dlp can reach
+    Vimeo                 transcript + MP4 where yt-dlp can still reach it,
+                          otherwise title/author/duration/poster via oembed
     LinkedIn Learning     inventoried only -- licensed, DRM'd, not retrievable
+
+Two providers now routinely refuse a stream to anything that is not a signed-in
+browser: Vimeo's web client demands a login and its player config answers 403,
+and PSU shuts the whole Canvas media API (media_attachments, media_objects and
+the per-course listing alike). Neither is treated as a dead end. Canvas media is
+recovered from the media_object that the embed iframe bootstraps into its ENV
+blob, and an unreachable Vimeo stream still gets a real inventory row from
+oembed. An embed that cannot be retrieved is recorded with a note saying why --
+never left as a silent blank, since a missing row reads as "nothing was there".
 
 Two Kaltura sessions are needed and they see different things. An anonymous
 widget session resolves public/third-party entries; an institutional KS lifted
@@ -60,6 +70,51 @@ PATTERNS = {
 }
 
 
+MEDIA_EXT = (".mp4", ".mkv", ".webm")
+
+
+def collapse_rolling(text):
+    """Collapse YouTube's rolling-window auto-captions into linear prose.
+
+    An auto-generated track re-sends the tail of one cue at the head of the next,
+    so flattening it naively repeats nearly every phrase about three times -- a
+    "transcript" that reads at 400+ wpm against a human ~140. For each cue, drop
+    the longest leading run of tokens that the text so far already ends with.
+
+    Only ever applied to auto-generated tracks: on a human transcript this would
+    quietly eat a genuine repetition.
+    """
+    out = []
+    for line in text.splitlines():
+        toks = line.split()
+        if not toks:
+            continue
+        overlap = 0
+        for size in range(min(len(toks), len(out)), 0, -1):
+            if out[-size:] == toks[:size]:
+                overlap = size
+                break
+        out.extend(toks[overlap:])
+    return " ".join(out)
+
+
+
+def has_media_file(dest):
+    """True when a finished, merged media file sits in this embed's directory.
+
+    yt-dlp names its output after the title, not "video.mp4", so presence has to
+    be tested by extension rather than by a fixed filename. It also leaves
+    per-format intermediates -- "Hellmart.f251.webm" beside "Hellmart.f399.mp4.part"
+    -- when a download dies before the merge. Those are single streams, often
+    audio only, so counting one as the finished video makes a half-downloaded
+    entry look complete and it never gets retried.
+    """
+    if not dest.is_dir():
+        return False
+    return any(f.suffix.lower() in MEDIA_EXT and not re.fullmatch(r".*\.f\d+", f.stem)
+               for f in dest.iterdir())
+
+
 def srt_to_text(caption):
     """Strip cue numbers and timestamps, leaving readable prose.
 
@@ -96,13 +151,15 @@ def srt_to_text(caption):
 class MediaArchiver:
     def __init__(self, archive_dir, ks=None, base=None, cookies=None,
                  sheets=False, video=False, youtube=False,
-                 slice_interval=60, max_slices=48, throttle=None, rate_limit=None):
+                 slice_interval=60, max_slices=48, throttle=None, rate_limit=None,
+                 max_height=720):
         self.dir = Path(archive_dir)
         self.out = self.dir / "media"
         self.ks = ks
         self.want = {"sheets": sheets, "video": video, "youtube": youtube}
         self.slice_interval = slice_interval
         self.max_slices = max_slices
+        self.max_height = max_height
         self.base = base.rstrip("/") if base else None
         self.throttle = throttle or Throttle()
         self.rate_limit = rate_limit  # bytes/sec ceiling for large downloads
@@ -300,6 +357,51 @@ class MediaArchiver:
 
     # -------------------------------------------------------------- canvas
 
+    def _best_mp4(self, sources):
+        """Best mp4 at or below --max-height; the smallest available if all exceed it.
+
+        Shares the ceiling with yt-dlp so every provider in one run lands at the
+        same quality, rather than each having its own private idea of "good".
+        """
+        out = []
+        for src in sources or []:
+            u = src.get("url") or src.get("src")
+            if not u or "mp4" not in (src.get("content_type") or src.get("fileExt") or ""):
+                continue
+            try:
+                h = int(src.get("height") or 0)
+            except (TypeError, ValueError):
+                h = 0
+            out.append((h, u))
+        if not out:
+            return None
+        under = [x for x in out if x[0] <= self.max_height]
+        return max(under)[1] if under else min(out)[1]
+
+    def _iframe_media_object(self, att_id):
+        """Recover Canvas media metadata from the embed page.
+
+        PSU shuts the whole media API -- media_attachments, media_objects and
+        the per-course listing all answer 404/403 -- so the documented routes
+        yield nothing at all. The iframe a browser actually loads still
+        bootstraps a complete media_object into its ENV blob: title, caption
+        tracks and bitrate-tagged mp4 sources. Same lesson as the discussion
+        attachments: when the API is closed, the rendered view still carries it.
+        """
+        r = self.get(f"{self.base}/media_attachments_iframe/{att_id}",
+                     params={"embedded": "true", "type": "video"})
+        if r is None or not r.ok:
+            return None
+        key = '"media_object":'
+        i = r.text.find(key)
+        if i < 0:
+            return None
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(r.text, i + len(key))
+        except ValueError:
+            return None
+        return obj or None
+
     def canvas_media(self, att_id, dest):
         """Canvas-hosted media: metadata carries caption tracks and mp4 sources."""
         if not self.base:
@@ -308,8 +410,11 @@ class MediaArchiver:
         if r is None or not r.ok:
             r = self.get(f"{self.base}/api/v1/media_objects/{att_id}")
         if r is None or not r.ok:
-            return None
-        d = r.json()
+            d = self._iframe_media_object(att_id)
+            if not d:
+                return None
+        else:
+            d = r.json()
         (dest / "meta.json").write_text(json.dumps(d, indent=1))
         for t in d.get("media_tracks", []) or []:
             content = t.get("content")
@@ -319,6 +424,12 @@ class MediaArchiver:
             if content:
                 (dest / f"transcript.{t.get('locale','en')}.vtt").write_text(content)
                 (dest / "transcript.txt").write_text(srt_to_text(content))
+        if self.want["video"]:
+            target = dest / "video.mp4"
+            if not (target.exists() and target.stat().st_size > 100_000):
+                src = self._best_mp4(d.get("media_sources"))
+                if src:
+                    self.stream_to(src, target)
         return d.get("title") or d.get("media_id")
 
     # ------------------------------------------------------------- yt-dlp
@@ -334,16 +445,110 @@ class MediaArchiver:
                # yt-dlp does its own bursty fetching, so give it the same manners.
                "--sleep-requests", str(round(self.throttle.min_gap, 1)),
                "--sleep-interval", "2", "--max-sleep-interval", "8",
-               "--retries", "3", "--retry-sleep", "linear=2:30"]
+               # YouTube resets long-lived connections on big files, and the
+               # rate cap makes them longer still. Each attempt resumes from the
+               # .part, so the answer is patience, not a faster download.
+               "--retries", "10", "--fragment-retries", "10",
+               "--retry-sleep", "linear=2:30", "--continue"]
         if self.rate_limit:
             cmd += ["--limit-rate", str(int(self.rate_limit))]
-        cmd += ["-f", "bv*[height<=720]+ba/b[height<=720]"] if want_video else ["--skip-download"]
+        h = self.max_height
+        cmd += ["-f", f"bv*[height<={h}]+ba/b[height<={h}]"] if want_video else ["--skip-download"]
         cmd.append(url)
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
-        for srt in dest.glob("*.srt"):
-            (dest / "transcript.txt").write_text(srt_to_text(srt.read_text(errors="ignore")))
-            break
+        # A metadata-only pass is quick; a 1080p lecture over a 2MB/s cap with
+        # reset-and-resume cycles is not, and 900s silently truncated it.
+        budget = 5400 if want_video else 900
+        attempts = 3 if want_video else 1
+        for attempt in range(attempts):
+            try:
+                p = subprocess.run(cmd, capture_output=True, text=True, timeout=budget)
+            except subprocess.TimeoutExpired:
+                self.notes.append(f"yt-dlp timed out after {budget}s: {url}")
+                return False
+            if p.returncode == 0:
+                break
+            # Resume picks up where the reset left off, so another invocation is
+            # cheap and usually finishes what retries alone could not.
+            if attempt == attempts - 1:
+                err = (p.stderr or "").strip().splitlines()
+                tail = err[-1][:200] if err else f"exit {p.returncode}"
+                self.notes.append(f"yt-dlp failed for {url}: {tail}")
+        self.write_transcript(dest)
         return p.returncode == 0
+
+    def write_transcript(self, dest):
+        """(Re)build transcript.txt from the best caption track already on disk.
+
+        Called on the cached path too, so a re-run repairs a transcript that an
+        earlier version of this tool built from the wrong track -- the files are
+        local, so it costs nothing and the archive heals itself.
+        """
+        cap, is_auto = self._pick_caption(dest)
+        if not cap:
+            return False
+        flat = srt_to_text(cap.read_text(errors="ignore"))
+        (dest / "transcript.txt").write_text(
+            collapse_rolling(flat) if is_auto else flat)
+        return True
+
+    @staticmethod
+    def _pick_caption(dest):
+        """Choose a caption track, preferring the uploader's over YouTube's ASR.
+
+        --write-subs and --write-auto-subs both fire, and the two are not
+        equivalent: the auto track is an unpunctuated rolling window with a
+        unique-word ratio around 0.11, against ~0.42 for the human one. Taking
+        whatever glob yields first picks the bad track roughly half the time --
+        and ".en-orig.srt" sorts ahead of ".en-US.srt", so in practice it lost
+        every time. Returns (path, is_auto) or (None, False).
+        """
+        srts = sorted(dest.glob("*.srt"))
+        if not srts:
+            return None, False
+        manual = []
+        info = next(iter(dest.glob("*.info.json")), None)
+        if info:
+            try:
+                manual = list((json.loads(info.read_text(errors="ignore"))
+                               .get("subtitles") or {}).keys())
+            except ValueError:
+                pass
+        for lang in manual:
+            for cand in srts:
+                if cand.name.endswith(f".{lang}.srt"):
+                    return cand, False
+        return srts[0], True
+
+    @staticmethod
+    def _ytdlp_meta(dest):
+        """Title and duration from the info.json yt-dlp leaves behind."""
+        info = next(iter(dest.glob("*.info.json")), None)
+        if not info:
+            return {}
+        try:
+            d = json.loads(info.read_text(errors="ignore"))
+        except ValueError:
+            return {}
+        return {"name": d.get("title"), "duration": int(d.get("duration") or 0)}
+
+    def vimeo_oembed(self, vid):
+        """Metadata for a Vimeo video yt-dlp can no longer open.
+
+        Vimeo's web client now demands a login, and its player config endpoint
+        answers 403 to anything that does not look like a browser, so even a
+        fully public course video can be unreachable as a stream. oembed is
+        still open and carries title, author, duration and a poster frame --
+        enough to inventory the video honestly rather than leave a blank row,
+        which is the same treatment LinkedIn Learning gets.
+        """
+        r = self.get("https://vimeo.com/api/oembed.json",
+                     params={"url": f"https://vimeo.com/{vid}"})
+        if r is None or r.status_code != 200:
+            return None
+        try:
+            return r.json()
+        except ValueError:
+            return None
 
     # ---------------------------------------------------------------- run
 
@@ -399,20 +604,68 @@ class MediaArchiver:
             for vid, pages in sorted(refs["youtube"].items()):
                 dest = self.out / "youtube" / vid
                 dest.mkdir(parents=True, exist_ok=True)
-                if any(dest.glob("*.info.json")):
+                # Cached metadata is not the same as cached video: asking for
+                # --video after a metadata-only run must actually fetch the file,
+                # not read the info.json as proof there is nothing left to do.
+                if any(dest.glob("*.info.json")) and not (
+                        self.want["video"] and not has_media_file(dest)):
+                    # Skipping the fetch must not drop the embed from the index:
+                    # restore the row from state rather than falling straight
+                    # through, or a re-run silently shrinks the archive.
+                    rec = dict(self.state.get(f"youtube:{vid}") or
+                               {"kind": "youtube", "id": vid, "resolved": True})
+                    rec["pages"] = pages
+                    self.write_transcript(dest)
+                    rec["transcript"] = (dest / "transcript.txt").exists()
+                    rec.update({k: v for k, v in self._ytdlp_meta(dest).items() if v})
+                    self.results[f"youtube:{vid}"] = rec
+                    self.state[f"youtube:{vid}"] = rec
                     print(f"  -- youtube {vid} cached"); continue
                 ok = self.ytdlp(f"https://www.youtube.com/watch?v={vid}", dest, self.want["video"])
                 rec = {"kind": "youtube", "id": vid, "pages": pages, "resolved": bool(ok),
                        "transcript": (dest / "transcript.txt").exists()}
+                rec.update({k: v for k, v in self._ytdlp_meta(dest).items() if v})
                 self.results[f"youtube:{vid}"] = rec
                 self.state[f"youtube:{vid}"] = rec
                 print(f"  {'ok ' if ok else '!! '}youtube {vid}")
             for vid, pages in sorted(refs["vimeo"].items()):
                 dest = self.out / "vimeo" / vid
                 dest.mkdir(parents=True, exist_ok=True)
+                prev = self.state.get(f"vimeo:{vid}") or {}
+                # Retry for video only if yt-dlp reached this one before. An entry
+                # that resolved via oembed has no stream to fetch, and retrying it
+                # every --video run would just hammer Vimeo for a guaranteed 403.
+                want_stream = (self.want["video"] and prev.get("resolved")
+                               and not has_media_file(dest))
+                if (any(dest.glob("*.info.json")) or (dest / "meta.json").exists()) \
+                        and not want_stream:
+                    rec = dict(prev or {"kind": "vimeo", "id": vid, "resolved": True})
+                    rec["pages"] = pages
+                    self.results[f"vimeo:{vid}"] = rec
+                    print(f"  -- vimeo {vid} cached")
+                    continue
                 ok = self.ytdlp(f"https://vimeo.com/{vid}", dest, self.want["video"])
-                self.results[f"vimeo:{vid}"] = {"kind": "vimeo", "id": vid, "pages": pages,
-                                                "resolved": bool(ok)}
+                rec = {"kind": "vimeo", "id": vid, "pages": pages, "resolved": bool(ok),
+                       "transcript": (dest / "transcript.txt").exists()}
+                if not ok:
+                    meta = self.vimeo_oembed(vid)
+                    if meta:
+                        rec.update(name=meta.get("title"),
+                                   duration=meta.get("duration") or 0,
+                                   author=meta.get("author_name"),
+                                   note="stream needs a logged-in Vimeo session; "
+                                        "metadata and poster frame only")
+                        if meta.get("thumbnail_url"):
+                            self.stream_to(meta["thumbnail_url"], dest / "poster.jpg",
+                                           expect="image")
+                        (dest / "meta.json").write_text(
+                            json.dumps({**rec, "raw": meta}, indent=1))
+                self.results[f"vimeo:{vid}"] = rec
+                self.state[f"vimeo:{vid}"] = rec
+                flag = "ok " if ok else ("~~ " if rec.get("name") else "!! ")
+                print(f"  {flag}vimeo {vid} {str(rec.get('name') or '')[:40]:<42} "
+                      f"{rec.get('duration') or '?':>5}s "
+                      f"transcript={'y' if rec.get('transcript') else 'n'}")
 
         for slug, pages in sorted(refs["linkedin"].items()):
             self.results[f"linkedin:{slug}"] = {
@@ -445,6 +698,8 @@ class MediaArchiver:
             thumb = ""
             if sheet.exists():
                 thumb = f'<img src="{kind}/{ident}/contactsheet.jpg" style="max-width:220px">'
+            elif (d / "poster.jpg").exists():
+                thumb = f'<img src="{kind}/{ident}/poster.jpg" style="max-width:220px">'
             rows.append(
                 f"<tr><td>{html.escape(kind)}</td>"
                 f"<td>{html.escape(str(r.get('name') or ident))}<br>"
@@ -475,6 +730,9 @@ def main():
     ap.add_argument("--cookies", help="Canvas cookie JSON, for Canvas-hosted media")
     ap.add_argument("--sheets", action="store_true", help="build contact sheets (needs ffmpeg)")
     ap.add_argument("--video", action="store_true", help="download full video (large)")
+    ap.add_argument("--max-height", type=int, default=720,
+                    help="vertical resolution ceiling for --video downloads "
+                         "(default 720; use 1080 or higher when disk is not the constraint)")
     ap.add_argument("--youtube", action="store_true", help="fetch YouTube/Vimeo via yt-dlp")
     ap.add_argument("--slice-interval", type=int, default=60, help="seconds between sheet frames")
     ap.add_argument("--max-slices", type=int, default=48)
@@ -491,7 +749,8 @@ def main():
     throttle = Throttle(min_gap=a.min_gap, jitter=a.jitter, rest_every=a.rest_every)
     m = MediaArchiver(a.archive_dir, a.ks, a.base, a.cookies,
                       a.sheets, a.video, a.youtube, a.slice_interval, a.max_slices,
-                      throttle=throttle, rate_limit=(a.limit_rate or None))
+                      throttle=throttle, rate_limit=(a.limit_rate or None),
+                      max_height=a.max_height)
     res = m.run()
     ok = sum(1 for r in res.values() if r.get("resolved"))
     tx = sum(1 for r in res.values() if r.get("transcript"))
