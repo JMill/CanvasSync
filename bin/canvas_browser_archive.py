@@ -103,10 +103,15 @@ class Archiver:
 
         Records present before but absent now are kept and flagged rather than
         deleted, so the archive can always say what it once held.
+
+        Returns the merged list, which is what the archive actually holds --
+        counting the live response instead under-reports the archive every time
+        something ages out upstream.
         """
         p = self.out / relpath
         if not isinstance(data, list):
-            return self.save_json(relpath, data)
+            self.save_json(relpath, data)
+            return data
         previous = []
         if p.exists():
             try:
@@ -128,8 +133,11 @@ class Archiver:
             vanished += 1
         if vanished:
             print(f"    ({vanished} record(s) no longer live upstream, kept and flagged)")
+            self.counts["retained_no_longer_live"] = (
+                self.counts.get("retained_no_longer_live", 0) + vanished)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(merged, indent=2, ensure_ascii=False))
+        return merged
 
     def save_html(self, relpath, title, body, source_url, extra_meta=""):
         p = self.out / relpath
@@ -183,8 +191,7 @@ class Archiver:
                 m["items"] = self.try_api(f"module {m['id']} items",
                                           f"courses/{self.cid}/modules/{m['id']}/items",
                                           {"include[]": "content_details"}) or []
-        self.save_json_merged("_api/modules.json", mods)
-        self.counts["modules"] = len(mods)
+        self.counts["modules"] = len(self.save_json_merged("_api/modules.json", mods))
 
         rows = []
         for m in mods:
@@ -207,9 +214,9 @@ class Archiver:
                            for it in m.get("items", []) if it.get("type") == "Page" and it.get("page_url")})
             pages = [{"url": u} for u in urls]
             print(f"    (pages index hidden; using {len(pages)} pages from modules)")
+            self.counts["pages"] = len(pages)
         else:
-            self.save_json_merged("_api/pages.json", pages)
-        self.counts["pages"] = len(pages)
+            self.counts["pages"] = len(self.save_json_merged("_api/pages.json", pages))
         for p in pages:
             full = self.try_api(f"page {p['url']}", f"courses/{self.cid}/pages/{p['url']}")
             if not full:
@@ -230,8 +237,8 @@ class Archiver:
                             {"include[]": ["submission", "rubric"]})
         if asgs is None:
             return
-        self.save_json_merged("_api/assignments.json", asgs)
-        self.counts["assignments"] = len(asgs)
+        self.counts["assignments"] = len(
+            self.save_json_merged("_api/assignments.json", asgs))
         for a in asgs:
             meta = f" &middot; due: {a.get('due_at') or 'n/a'} &middot; points: {a.get('points_possible')}"
             desc = a.get("description")
@@ -250,8 +257,7 @@ class Archiver:
             return
         if not announcements:
             topics = [t for t in topics if not t.get("is_announcement")]
-        self.save_json_merged(f"_api/{label}.json", topics)
-        self.counts[label] = len(topics)
+        self.counts[label] = len(self.save_json_merged(f"_api/{label}.json", topics))
         for t in topics:
             body = [t.get("message") or ""]
             view = self.try_api(f"{label[:-1]} {t['id']} replies",
@@ -285,8 +291,8 @@ class Archiver:
         quizzes = self.try_api("quizzes", f"courses/{self.cid}/quizzes")
         if quizzes is None:
             return
-        self.save_json_merged("_api/quizzes.json", quizzes)
-        self.counts["quizzes"] = len(quizzes)
+        self.counts["quizzes"] = len(
+            self.save_json_merged("_api/quizzes.json", quizzes))
         for q in quizzes:
             meta = f" &middot; due: {q.get('due_at') or 'n/a'} &middot; points: {q.get('points_possible')}"
             self.save_html(f"quizzes/{q['id']}_{slugify(q['title'])}.html",
@@ -312,7 +318,7 @@ class Archiver:
         if extra:
             print(f"    (+{len(extra)} file(s) absent from the index, found via modules + embedded links)")
         files = indexed + extra + attach
-        self.save_json_merged("_api/files.json", files)
+        archived_files = self.save_json_merged("_api/files.json", files)
         self.save_json("_api/folders.json", folders or [])
         folder_path = {}
         for f in folders or []:
@@ -353,7 +359,9 @@ class Archiver:
             time.sleep(0.2)  # be polite
         state_file.parent.mkdir(parents=True, exist_ok=True)
         state_file.write_text(json.dumps(state, indent=2))
-        self.counts["files"] = len(files)
+        # counts describe what the archive holds; the line below describes what
+        # this run did, so they differ whenever a file has vanished upstream.
+        self.counts["files"] = len(archived_files)
         print(f"  files: {len(files)} ({downloaded} downloaded, {skipped} unchanged, {failed} failed)")
 
     def _attachments_from_views(self):
