@@ -45,6 +45,9 @@ img{{max-width:100%}}</style></head><body>
 </body></html>"""
 
 
+LOCK_STUB = '<p><em>Not yet available &mdash; locked when archived.</em></p>'
+
+
 class Archiver:
     def __init__(self, base, course_id, out_dir, cookies_file):
         self.base = base.rstrip("/")
@@ -139,6 +142,23 @@ class Archiver:
         p.write_text(json.dumps(merged, indent=2, ensure_ascii=False))
         return merged
 
+    def kept_relocked(self, relpath, title):
+        """True if `relpath` already holds real content, which a lock stub must not replace.
+
+        Instructors re-lock content that was open: AI 574's Lesson 14 was readable
+        for weeks, then gained an unlock_at weeks away, and Canvas began answering
+        locked_for_user with an empty body. Writing the stub over the earlier copy
+        destroyed the only archived version of both of its pages.
+        """
+        try:
+            if LOCK_STUB in (self.out / relpath).read_text():
+                return False
+        except OSError:
+            return False
+        print(f"    (re-locked upstream, keeping archived copy: {title})")
+        self.counts["relocked_kept"] = self.counts.get("relocked_kept", 0) + 1
+        return True
+
     def save_html(self, relpath, title, body, source_url, extra_meta=""):
         p = self.out / relpath
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -222,12 +242,13 @@ class Archiver:
             if not full:
                 continue
             name = slugify(p["url"])
-            self.save_json(f"_api/pages/{name}.json", full)
             body = full.get("body")
             if not body and full.get("locked_for_user"):
-                body = ('<p><em>Not yet available &mdash; locked when archived.</em></p>'
-                        + (full.get("lock_explanation") or ""))
+                if self.kept_relocked(f"pages/{name}.html", full["title"]):
+                    continue  # leave the earlier _api JSON alone too: it has the body
+                body = LOCK_STUB + (full.get("lock_explanation") or "")
                 self.counts["pages_locked"] = self.counts.get("pages_locked", 0) + 1
+            self.save_json(f"_api/pages/{name}.json", full)
             self.save_html(f"pages/{name}.html", full["title"], body,
                            full.get("html_url", ""))
         print(f"  pages: {len(pages)} ({self.counts.get('pages_locked', 0)} still locked)")
@@ -242,11 +263,12 @@ class Archiver:
         for a in asgs:
             meta = f" &middot; due: {a.get('due_at') or 'n/a'} &middot; points: {a.get('points_possible')}"
             desc = a.get("description")
+            relpath = f"assignments/{a['id']}_{slugify(a['name'])}.html"
             if not desc and a.get("locked_for_user"):
-                desc = ('<p><em>Not yet available &mdash; locked when archived.</em></p>'
-                        + (a.get("lock_explanation") or ""))
-            self.save_html(f"assignments/{a['id']}_{slugify(a['name'])}.html",
-                           a["name"], desc, a.get("html_url", ""), meta)
+                if self.kept_relocked(relpath, a["name"]):
+                    continue
+                desc = LOCK_STUB + (a.get("lock_explanation") or "")
+            self.save_html(relpath, a["name"], desc, a.get("html_url", ""), meta)
         print(f"  assignments: {len(asgs)}")
 
     def do_discussions(self, announcements):
