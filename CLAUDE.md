@@ -31,3 +31,12 @@ Fork of perslev/CanvasSync — Python CLI that syncs Canvas LMS courses to disk 
 - Elucidat courses store each page's HTML **character-reversed** under an `lmth` key (`html` backwards); `window.NAVIGATION_OBJECT` in the project JS is a complete page manifest. No DRM — fully mirrorable. See `si_archive/elucidat.py`.
 - Canvas cartridges are lossy in two ways worth knowing: `<id>/assessment_qti.xml` drops questions that `non_cc_assessments/<id>.xml.qti` keeps (Entry Survey 17 vs 23), and content unreachable from the module graph is invisible to a naive walk — this course had 42 such items, including its entire announcement stream. Diff the manifest against the module graph, don't follow links.
 - Whisper fabricates fluent text on non-speech audio in at least three modes: silence (`you you you`), music-only (`We'll be right back.`), and a mid-recording repetition loop on long files. Guards live in `si_archive/media.py`; `--condition-on-previous-text False` recovers the loop case. Never trust a transcript's existence — check its word distribution.
+
+## PR review gate
+
+- After opening a PR and after every push, inspect conversation comments, submitted reviews, inline review threads, agent messages, and review-job status. Include unresolved or outdated threads whose findings may still apply.
+- Identify expected agent reviews and required human reviews. Wait for their completion. Silence, a missing result, or a queued, running, failed or cancelled review job is not a completed review. Retry recoverable failures; otherwise report the blocker and leave the PR unmerged.
+- Reconcile every actionable finding with a fix or documented, evidence-based rationale. Keep unresolved objections explicit and honor required reviewer approvals.
+- After fixes, rerun affected checks and obtain any review needed for the changed scope. Check again for feedback that arrived during the work.
+- Immediately before merging, refresh the PR head, all review feedback and review-job status. Confirm the final head contains the reviewed changes, required checks pass for that head, expected reviews are complete, and no actionable finding is unhandled. If the head changes or new actionable feedback arrives, repeat the relevant review and checks.
+- Existing repository permissions, required approvals and merge rules still apply. This gate grants no additional authority and does not permit bypassing protections.
