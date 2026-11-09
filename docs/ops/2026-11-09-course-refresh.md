@@ -40,7 +40,12 @@ GitHub. This record contains only operational results.
 - The login session saved earlier in the day was reused for the media and
   attachment steps without a second Duo prompt.
 
-## Follow-up
+## Follow-up (done same day)
 
-The submission-attachment gap noted on 2026-11-04 recurred. The archiver should
-enumerate `submission.attachments` and download them directly.
+The submission-attachment gap noted on 2026-11-04 recurred, so the archiver now
+enumerates `submission.attachments` from the merged assignments JSON and downloads
+each one from its signed URL into `files/_submission_attachments/<id>_<name>`.
+A verification re-run picked up 26 ENGR820 and 9 AI574 submission files that had
+never been archived. The four previously hand-recovered files kept identical
+SHA-256 hashes. Endpoint errors fell to 20 (ENGR820) and 111 (AI574), because
+these ids are no longer tried through the course-files route.

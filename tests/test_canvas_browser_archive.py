@@ -64,3 +64,66 @@ def test_relocked_assignment_keeps_its_description(tmp_path):
 
     assert "Deliverables" in (tmp_path / "out/assignments/7_Final_Project.html").read_text()
     assert a.counts.get("relocked_kept") == 1
+
+
+# --- submission attachments -------------------------------------------------
+# Files a student attached to their own submissions are not course files either:
+# /courses/<cid>/files/<id> 404s for them, exactly like discussion-reply
+# attachments. The assignment JSON (include[]=submission) carries each one's
+# metadata and a verifier-signed URL that works with the session cookie.
+
+class FakeResponse:
+    def __init__(self, body):
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def raise_for_status(self):
+        pass
+
+    def iter_content(self, n):
+        yield self.body
+
+
+SUBMITTED = {"id": 9, "name": "Peer Review", "description": "<p>x</p>",
+             "html_url": "https://x/a/9",
+             "submission": {"attachments": [
+                 {"id": 555, "display_name": "review.pdf", "size": 4,
+                  "updated_at": "2026-11-05T18:29:09Z",
+                  "url": "https://x/files/555/download?verifier=abc"},
+                 {"id": 556, "display_name": "no-url.pdf", "size": 1}]}}
+
+
+def test_submission_attachments_download_from_their_signed_url(tmp_path, monkeypatch):
+    queried, fetched = [], []
+    a = make_archiver(tmp_path, {"courses/1/assignments": [SUBMITTED]})
+    a.do_assignments()
+    a._modules = []
+    a.try_api = lambda label, path, params=None: queried.append(path)
+    monkeypatch.setattr(cba.time, "sleep", lambda s: None)
+    a.s.get = lambda url, **kw: fetched.append(url) or FakeResponse(b"%PDF")
+    a.do_files()
+
+    out = tmp_path / "out/files/_submission_attachments/555_review.pdf"
+    assert out.read_bytes() == b"%PDF"
+    assert fetched == ["https://x/files/555/download?verifier=abc"]
+    # never routed through the course-files endpoint that 404s for these
+    assert not any("files/555" in p for p in queried)
+    assert not any("555" in e for e in a.errors)
+    assert a.counts["files"] == 1
+
+
+def test_submission_attachments_survive_the_assignment_leaving_the_api(tmp_path, monkeypatch):
+    make_archiver(tmp_path, {"courses/1/assignments": [SUBMITTED]}).do_assignments()
+    a = make_archiver(tmp_path, {"courses/1/assignments": []})
+    a.do_assignments()
+    a._modules = []
+    monkeypatch.setattr(cba.time, "sleep", lambda s: None)
+    a.s.get = lambda url, **kw: FakeResponse(b"%PDF")
+    a.do_files()
+
+    assert (tmp_path / "out/files/_submission_attachments/555_review.pdf").exists()

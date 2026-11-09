@@ -331,10 +331,17 @@ class Archiver:
         # hidden, though they stay reachable by id. Always union the two sources.
         # Attachments posted in discussion replies are never course files, so
         # they must come from the topic views rather than the files API.
+        # The same holds for files attached to one's own submissions; those come
+        # from the assignment records instead.
         attach = [a for a in self._attachments_from_views()
                   if a["id"] not in {f["id"] for f in indexed}]
         if attach:
             print(f"    (+{len(attach)} reply attachment(s) taken from discussion views)")
+        subs = [a for a in self._attachments_from_submissions()
+                if a["id"] not in {f["id"] for f in indexed + attach}]
+        if subs:
+            print(f"    (+{len(subs)} submission attachment(s) taken from assignments)")
+        attach += subs
         extra = self._files_from_references(
             known={f["id"] for f in indexed} | {a["id"] for a in attach})
         if extra:
@@ -352,9 +359,14 @@ class Archiver:
         for f in files:
             # Reply attachments have no folder_id and their display names are
             # whatever a classmate uploaded, so keep them out of the course tree.
-            sub_dir = ("_discussion_attachments" if f.get("_reply_attachment")
-                       else folder_path.get(f.get("folder_id"), ""))
-            rel = Path("files") / sub_dir / f["display_name"]
+            # Submission attachments get an id prefix: every revision of the same
+            # paper tends to share a name, and each one is worth keeping.
+            if f.get("_submission_attachment"):
+                rel = Path("files/_submission_attachments") / f"{f['id']}_{f['display_name']}"
+            else:
+                sub_dir = ("_discussion_attachments" if f.get("_reply_attachment")
+                           else folder_path.get(f.get("folder_id"), ""))
+                rel = Path("files") / sub_dir / f["display_name"]
             key = str(f["id"])
             sig = f"{f.get('size')}|{f.get('updated_at')}"
             dest = self.out / rel
@@ -422,6 +434,35 @@ class Archiver:
                             rec["updated_at"] = a.get("created_at")
                         rec["_reply_attachment"] = True
                         found[a["id"]] = rec
+        return list(found.values())
+
+    def _attachments_from_submissions(self):
+        """Collect files attached to this user's own assignment submissions.
+
+        Like reply attachments these are not course files, so the course-files
+        endpoint 404s for every one. Read them from the merged assignments JSON
+        (include[]=submission) rather than the live response, so an attachment
+        stays archived even after its assignment stops being served.
+        """
+        p = self.out / "_api/assignments.json"
+        if not p.exists():
+            return []
+        try:
+            asgs = json.loads(p.read_text())
+        except (OSError, ValueError) as e:
+            self.errors.append(f"attachments from {p.name}: {e}")
+            return []
+        found = {}
+        for a in asgs:
+            for att in ((a.get("submission") or {}).get("attachments") or []):
+                if not att.get("id") or not att.get("url"):
+                    continue
+                rec = dict(att)
+                rec.setdefault("display_name", att.get("filename") or str(att["id"]))
+                if not rec.get("updated_at"):
+                    rec["updated_at"] = att.get("created_at")
+                rec["_submission_attachment"] = True
+                found[att["id"]] = rec
         return list(found.values())
 
     def _files_from_references(self, known=()):
