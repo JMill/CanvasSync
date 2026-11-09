@@ -31,6 +31,16 @@ def slugify(text, maxlen=80):
     return text[:maxlen] or "untitled"
 
 
+def safe_name(name, fallback):
+    """Reduce an upstream filename to one plain path component.
+
+    Attachment names are chosen by whoever uploaded the file (classmates, for
+    reply attachments), so a name holding '/' or '..' must never become a path.
+    """
+    name = re.split(r"[/\\]", str(name or ""))[-1].replace("\0", "")
+    return str(fallback) if name in ("", ".", "..") else name
+
+
 def wrap_html(title, body, source_url, extra_meta=""):
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -361,15 +371,23 @@ class Archiver:
             # whatever a classmate uploaded, so keep them out of the course tree.
             # Submission attachments get an id prefix: every revision of the same
             # paper tends to share a name, and each one is worth keeping.
+            name = safe_name(f.get("display_name"), f["id"])
             if f.get("_submission_attachment"):
-                rel = Path("files/_submission_attachments") / f"{f['id']}_{f['display_name']}"
+                rel = Path("files/_submission_attachments") / f"{f['id']}_{name}"
             else:
                 sub_dir = ("_discussion_attachments" if f.get("_reply_attachment")
                            else folder_path.get(f.get("folder_id"), ""))
-                rel = Path("files") / sub_dir / f["display_name"]
+                rel = Path("files") / sub_dir / name
             key = str(f["id"])
             sig = f"{f.get('size')}|{f.get('updated_at')}"
             dest = self.out / rel
+            # Folder paths come from Canvas too; refuse anything that resolves
+            # outside the archive rather than trusting either source.
+            if self.out.resolve() not in dest.resolve().parents:
+                failed += 1
+                self.errors.append(f"file {f['id']}: unsafe path {rel}")
+                print(f"    !! file {f['id']}: unsafe path {rel}")
+                continue
             if state.get(key) == sig and dest.exists():
                 skipped += 1
                 continue

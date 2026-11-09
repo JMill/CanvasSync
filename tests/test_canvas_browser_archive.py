@@ -127,3 +127,33 @@ def test_submission_attachments_survive_the_assignment_leaving_the_api(tmp_path,
     a.do_files()
 
     assert (tmp_path / "out/files/_submission_attachments/555_review.pdf").exists()
+
+
+def test_attachment_names_cannot_escape_the_archive(tmp_path, monkeypatch):
+    # Reply attachments carry classmate-chosen names; none may climb out.
+    evil = dict(SUBMITTED, submission={"attachments": [
+        {"id": 557, "display_name": "../../../../../../../escaped.txt", "size": 4,
+         "updated_at": "t", "url": "https://x/files/557/download?verifier=z"},
+        {"id": 558, "display_name": "..", "size": 4,
+         "updated_at": "t", "url": "https://x/files/558/download?verifier=z"}]})
+    a = make_archiver(tmp_path, {"courses/1/assignments": [evil]})
+    a.do_assignments()
+    a._modules = []
+    monkeypatch.setattr(cba.time, "sleep", lambda s: None)
+    a.s.get = lambda url, **kw: FakeResponse(b"data")
+    a.do_files()
+
+    out = (tmp_path / "out").resolve()
+    written = [p.resolve() for p in tmp_path.rglob("*") if p.is_file() and p.read_bytes() == b"data"]
+    assert len(written) == 2
+    assert all(out in p.parents for p in written)
+    assert not (tmp_path / "escaped.txt").exists()
+
+
+def test_safe_name_keeps_ordinary_names_unchanged():
+    for n in ["[Jonathan - Miller]- Assignment3.pdf", "Figure 5- digital_waveform.gif",
+              "LipNet： How easy?.mkv"]:
+        assert cba.safe_name(n, 1) == n
+    assert cba.safe_name("a/b\\c.pdf", 1) == "c.pdf"
+    assert cba.safe_name("..", 7) == "7"
+    assert cba.safe_name("", 7) == "7"
