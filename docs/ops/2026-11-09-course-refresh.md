@@ -49,3 +49,22 @@ A verification re-run picked up 26 ENGR820 and 9 AI574 submission files that had
 never been archived. The four previously hand-recovered files kept identical
 SHA-256 hashes. Endpoint errors fell to 20 (ENGR820) and 111 (AI574), because
 these ids are no longer tried through the course-files route.
+
+## Backfill of the completed courses
+
+Re-ran the other eight PSU archives so the fix could collect their submission
+attachments. All runs reported 0 failed downloads.
+
+| Course | Submission files | Endpoint errors |
+| --- | --- | --- |
+| AI570 | 14 | 62 → 47 |
+| ENGR405 | 16 | 20 → 4 |
+| ENGR804 | 13 | 57 → 44 |
+| ENGR801 | 7 | 18 → 11 |
+| DAAN862 | 25 | 32 → 7 |
+| AI801 | 19 | 31 → 11 |
+| Strategic Foresight, SARI | 0 | unchanged |
+
+Three other files also changed upstream and were refreshed: one AI570 course
+file and two AI801 discussion-reply images. Submission attachments across all
+ten archives now total 129 files (~750 MB).
