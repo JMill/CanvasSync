@@ -510,3 +510,31 @@ def test_shrink_leaves_16bit_grey_untouched(tmp_path):
     src, out, _ = _shrunk(tmp_path, im, "g16.png", format="PNG")
     import base64 as b64
     assert out.mode.startswith("I")  # original bytes, not a saturated JPEG
+
+
+@pytest.mark.parametrize("payload", [
+    "<p>a<!-- x --!><img src=x onerror=alert(1)> --></p>",
+    "<p><!--><img src=x onerror=alert(1)>--></p>",
+    "<p><!---><img src=x onerror=alert(1)>--></p>",
+    '<xmp><p title="</xmp><img src=x onerror=alert(1)>"></xmp>',
+    '<noembed><p title="</noembed><img src=x onerror=alert(1)>"></noembed>',
+    '<textarea><p title="</textarea><img src=x onerror=alert(1)>"></textarea>',
+    '<noframes><p title="</noframes><img src=x onerror=alert(1)>"></noframes>',
+    '<svg><![CDATA[><img src=x onerror=alert(1)>]]></svg>',
+    '<![CDATA[><img src=x onerror=alert(1)>]]>',
+    '<?xml ><img src=x onerror=alert(1)>?>',
+    '<!DOCTYPE x><template><img src=x onerror=alert(1)></template>',
+])
+def test_clean_content_survives_parser_differentials(payload):
+    # Judge the output the way a browser-like parser builds it, not by string
+    # search: no element may carry an event handler, and no script may exist.
+    import lxml.html
+    out = citi.clean_content(f"<div class='module-classic'>{payload}<p>keep</p></div>",
+                             lambda p: None)
+    tree = lxml.html.fromstring(f"<div>{out}</div>")
+    for el in tree.iter():
+        if not isinstance(el.tag, str):
+            continue
+        assert el.tag not in ("script", "iframe", "object", "embed")
+        assert not [a for a in el.attrib if a.lower().startswith("on")], out
+    assert "<!--" not in out and "CDATA" not in out and "keep" in out

@@ -50,6 +50,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 from bs4 import BeautifulSoup, NavigableString
+from bs4.element import CData, Comment, Declaration, Doctype, ProcessingInstruction
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -402,9 +403,19 @@ def clean_content(content_html, resolve_asset):
         _to_details(soup, label, panel)
         show.decompose()
 
+    # Comment-like nodes are where Python's html.parser and a browser disagree
+    # ("<!-- x --!>" ends a comment for a browser, not for html.parser; CDATA
+    # outside SVG is a bogus comment closed by the first ">"), so markup hidden
+    # inside one here could come alive on the phone. Nothing readable lives in
+    # them; drop them all. Raw-text elements go for the same reason.
+    for node in root.find_all(string=lambda x: isinstance(
+            x, (Comment, CData, ProcessingInstruction, Declaration, Doctype))):
+        node.extract()
     for t in root.find_all(["script", "style", "noscript", "form", "input", "link", "meta",
                             "object", "embed", "applet", "base", "frame", "frameset",
-                            "animate", "set", "animatemotion", "animatetransform"]):
+                            "animate", "set", "animatemotion", "animatetransform",
+                            "xmp", "noembed", "noframes", "plaintext", "textarea",
+                            "title", "template", "select"]):
         t.decompose()
     for t in root.find_all(True):
         _strip_hidden_style(t)
