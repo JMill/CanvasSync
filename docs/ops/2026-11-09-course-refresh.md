@@ -68,3 +68,30 @@ attachments. All runs reported 0 failed downloads.
 Three other files also changed upstream and were refreshed: one AI570 course
 file and two AI801 discussion-reply images. Submission attachments across all
 ten archives now total 129 files (~750 MB).
+
+## Evening ENGR820 refresh
+
+After the evening submissions (Literature Critique 6, Statistical Analysis
+Part 2, Experimental Design second submission and its review rebuttal),
+Module 11 was `completed` and Module 12 `unlocked`, with 2 `must_view` items
+pending. The unlock walker viewed both, which completed Module 12 and cascaded
+Module 13 open. Nothing in the course is locked anymore. This was the first
+real walk since August; every run in between was a dry run against the
+`must_submit` wall.
+
+Archive: 59 pages, 0 locked (was 3). 89 files: 8 new, all submission
+attachments from the evening, 0 failed. The session saved at 10:26 was reused;
+no Duo prompt.
+
+Status read from the merged `_api/assignments.json`:
+
+- Due Tue Nov 10, 08:00 ET: all four submitted (Literature Critique 6,
+  Statistical Analysis Part 2, Experimental Design second submission, Quiz 3).
+- Quiz 3 shows 6/20 with `pending_review`: the manually graded questions are
+  not scored yet.
+- Peer Review for Experimental Design shows 0, entered 2026-11-03T13:19Z for a
+  missing submission. The submission came 2026-11-05 (late) and has not been
+  regraded.
+- Next due, Tue Nov 17 08:00 ET: Statistical Analysis Exercise Part 3 (team
+  reflection PDF, needs the partner) and Literature Critique 7.
+- Dec 8: Quiz 4 and the Final Research Paper.
