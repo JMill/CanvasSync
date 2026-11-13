@@ -2,6 +2,33 @@
 
 Fork of perslev/CanvasSync — Python CLI that syncs Canvas LMS courses to disk (`python bin/canvas.py`). Used here as personal backup tooling, not active upstream development.
 
+## Start here and choose a task
+
+This file is the shared guide for Claude Code, Codex, and other agents;
+[AGENTS.md](AGENTS.md) points here. The upstream [README.md](README.md) describes
+the original API client. Use this guide for the fork's browser and media tools.
+Run commands from the repository root and check `git status --short --branch`
+before editing. Existing local environments and home-directory wrappers are
+machine setup, not files a fresh clone provides.
+
+| Task | Code and evidence to read |
+|---|---|
+| Refresh a course archive | Recent dated records in `docs/ops/`, then the workflows below and `bin/canvas_browser_archive.py` |
+| Fix browser login or cookies | `bin/canvas_login.py` and `tests/test_canvas_login.py` |
+| Fix missing course content | `bin/canvas_browser_archive.py` and `tests/test_canvas_browser_archive.py`; prerequisite handling is in `bin/canvas_unlock_walk.py` |
+| Extract embedded media | `bin/canvas_media_archive.py`; read the session and transcript gotchas below |
+| Work on CITI | `bin/citi_archive.py` and `tests/test_citi_archive.py`; preserve the learner-action refusals below |
+| Work on Systematic Innovation | `bin/si_archive.py`, the corresponding stage in `si_archive/`, and its `tests/test_*.py` |
+| Change the original API sync | `CanvasSync/`, `bin/canvas.py`, and the upstream README |
+
+For code changes, run the affected pytest files with the configured interpreter
+(`.venv/bin/python -m pytest tests/test_canvas_login.py -q`, for example), then
+broaden to `tests/` when shared behavior changes. Tests use fixtures; a passing
+unit test does not demonstrate a successful live archive. Record the archive
+verification result separately, and keep cookies and learner content out of
+commits. Put refresh handoffs in `docs/ops/` with the date, course, counts,
+verification, and next action, following the existing records.
+
 ## What this fork adds
 
 - Env-var config for non-interactive, multi-instance use (commit `64438db`): vars in `CanvasSync/settings/settings.py` and `cryptography.py`.
