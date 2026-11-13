@@ -1,4 +1,9 @@
 # CanvasSync
+
+This fork includes browser, media, CITI, and Systematic Innovation archive tools.
+Agents start with [AGENTS.md](AGENTS.md), which routes to the shared
+[CLAUDE.md](CLAUDE.md) guide. The original CanvasSync documentation follows.
+
 Synchronise modules, assignments and files located on a Canvas by Instructure web server to your local computer.
 
 Description
